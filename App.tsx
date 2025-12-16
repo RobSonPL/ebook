@@ -6,11 +6,24 @@ import { PhaseBriefing } from './components/PhaseBriefing';
 import { PhaseStructure } from './components/PhaseStructure';
 import { PhaseWriting } from './components/PhaseWriting';
 import { PhaseExtras } from './components/PhaseExtras';
-import { AppPhase, BriefingData, EbookData } from './types';
+import { AdminPanel } from './components/AdminPanel';
+import { AppPhase, BriefingData, EbookData, User, ExtrasData } from './types';
 import { generateStructure, generateChapterStream, generateExtras } from './services/geminiService';
+import { getCurrentUser, getAllUsers } from './services/mockAuth';
 import { INITIAL_BRIEFING } from './constants';
 
 const App: React.FC = () => {
+  // Auth State - BYPASS LOGIN (Default User)
+  const [currentUser, setCurrentUser] = useState<User>({
+    id: 'guest-admin',
+    email: 'gosc@ebook-pro.pl',
+    name: 'Użytkownik Gość',
+    role: 'admin', // Admin role allows seeing all ebooks
+    joinedAt: Date.now(),
+    avatarUrl: 'https://ui-avatars.com/api/?name=Gość&background=2563eb&color=fff'
+  });
+
+  // App State
   const [phase, setPhase] = useState<AppPhase>(AppPhase.DASHBOARD);
   const [briefing, setBriefing] = useState<BriefingData>(INITIAL_BRIEFING);
   
@@ -28,6 +41,10 @@ const App: React.FC = () => {
 
   // Database state
   const [allEbooks, setAllEbooks] = useState<EbookData[]>([]);
+  const [isDatabaseLoaded, setIsDatabaseLoaded] = useState(false);
+  
+  // Admin State
+  const [allUsers, setAllUsers] = useState<User[]>([]);
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [currentChapterId, setCurrentChapterId] = useState<string | null>(null);
@@ -36,8 +53,16 @@ const App: React.FC = () => {
   // --- Initial Load ---
 
   useEffect(() => {
+    // 1. Load Data
     loadEbooks();
   }, []);
+
+  // Update Admin Data when entering admin phase
+  useEffect(() => {
+    if (phase === AppPhase.ADMIN) {
+      setAllUsers(getAllUsers());
+    }
+  }, [phase]);
 
   // --- Data Management ---
 
@@ -46,26 +71,24 @@ const App: React.FC = () => {
     if (stored) {
       try {
         const parsed: EbookData[] = JSON.parse(stored);
-        setAllEbooks(parsed);
+        if (Array.isArray(parsed)) {
+          setAllEbooks(parsed);
+        } else {
+          setAllEbooks([]);
+        }
       } catch (e) {
         console.error("Failed to parse database", e);
         setAllEbooks([]);
       }
     }
+    setIsDatabaseLoaded(true);
   };
 
   // Sync ALL ebooks to LocalStorage
   useEffect(() => {
-    if (allEbooks.length > 0) {
-      localStorage.setItem('ebooks', JSON.stringify(allEbooks));
-    } else {
-       // If empty but we loaded, maybe we should clear LS or leave it?
-       // Leaving it is fine, but if we deleted everything, we need to update LS
-       if (localStorage.getItem('ebooks')) {
-          localStorage.setItem('ebooks', JSON.stringify([]));
-       }
-    }
-  }, [allEbooks]);
+    if (!isDatabaseLoaded) return;
+    localStorage.setItem('ebooks', JSON.stringify(allEbooks));
+  }, [allEbooks, isDatabaseLoaded]);
 
   // Keep ref in sync
   useEffect(() => {
@@ -76,48 +99,63 @@ const App: React.FC = () => {
 
   const saveEbookToLocalStorage = useCallback(() => {
     const currentData = ebookDataRef.current;
-    // Don't save empty drafts or when not in an editing phase
-    if (!currentData.id || phase === AppPhase.DASHBOARD) return;
+    
+    // Don't save empty drafts or if we haven't loaded DB yet
+    if (!currentData.id || !isDatabaseLoaded) return;
+    
+    // Safety check: ensure ownerId is set (backward compatibility)
+    if (currentUser && !currentData.ownerId) {
+       currentData.ownerId = currentUser.id;
+    }
 
     setAllEbooks(prev => {
       const index = prev.findIndex(e => e.id === currentData.id);
+      const timestamp = Date.now();
+      
       if (index >= 0) {
          const updated = [...prev];
-         updated[index] = { ...currentData, lastUpdated: Date.now() };
+         updated[index] = { ...currentData, lastUpdated: timestamp };
          return updated;
       } else {
-         return [...prev, { ...currentData, lastUpdated: Date.now() }];
+         return [...prev, { ...currentData, lastUpdated: timestamp }];
       }
     });
     setLastSaved(Date.now());
-  }, [phase]);
+  }, [isDatabaseLoaded, currentUser]);
 
   // Interval Autosave (Every 60 seconds)
   useEffect(() => {
     const intervalId = setInterval(() => {
-      saveEbookToLocalStorage();
+      if (currentUser) saveEbookToLocalStorage();
     }, 60000);
 
     return () => clearInterval(intervalId);
-  }, [saveEbookToLocalStorage]);
+  }, [saveEbookToLocalStorage, currentUser]);
 
   // Save on page close/reload
   useEffect(() => {
     const handleBeforeUnload = () => {
-      saveEbookToLocalStorage();
+      if (currentUser) saveEbookToLocalStorage();
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [saveEbookToLocalStorage]);
+  }, [saveEbookToLocalStorage, currentUser]);
 
 
-  // --- Actions ---
+  // --- User Actions ---
+  
+  const handleLogout = () => {
+    // No-op or reset view since login is disabled
+    setPhase(AppPhase.DASHBOARD);
+    alert("Tryb gościa aktywny.");
+  };
 
   const handleStartNew = () => {
     saveEbookToLocalStorage(); 
     const newId = crypto.randomUUID();
     const newData: EbookData = {
       id: newId,
+      ownerId: currentUser?.id, // Assign owner
       createdAt: Date.now(),
       lastUpdated: Date.now(),
       title: '',
@@ -146,12 +184,10 @@ const App: React.FC = () => {
   };
 
   const handleDeleteEbook = (id: string) => {
-    if (window.confirm("Czy na pewno chcesz usunąć ten e-book?")) {
       setAllEbooks(prev => prev.filter(e => e.id !== id));
       if (ebookData.id === id) {
         setPhase(AppPhase.DASHBOARD);
       }
-    }
   };
 
   const handleStartFromIdea = (ideaBriefing: BriefingData) => {
@@ -159,6 +195,7 @@ const App: React.FC = () => {
     const newId = crypto.randomUUID();
     const newData: EbookData = {
       id: newId,
+      ownerId: currentUser?.id, // Assign owner
       createdAt: Date.now(),
       lastUpdated: Date.now(),
       title: '', 
@@ -176,20 +213,23 @@ const App: React.FC = () => {
     setPhase(AppPhase.DASHBOARD);
   };
 
+  const handleGoToAdmin = () => {
+    saveEbookToLocalStorage();
+    setPhase(AppPhase.ADMIN);
+  };
+
   // --- Phase 1: Briefing -> Structure ---
   const handleBriefingSubmit = async (data: BriefingData) => {
     setBriefing(data);
     setIsGenerating(true);
     
-    // Update local state
     setEbookData(prev => ({ ...prev, briefing: data }));
     
-    // Note: We don't force save here yet, as structure generation is next.
-
     try {
       const toc = await generateStructure(data);
-      const updatedEbook = {
+      const updatedEbook: EbookData = {
         ...ebookData,
+        ownerId: currentUser?.id,
         briefing: data,
         title: toc.title,
         chapters: toc.chapters.map((c, idx) => ({
@@ -202,12 +242,11 @@ const App: React.FC = () => {
       };
       
       setEbookData(updatedEbook);
-      // Update ref immediately for the implicit save that might happen
       ebookDataRef.current = updatedEbook;
       
       setPhase(AppPhase.STRUCTURE);
-      // Trigger save after structure is generated
-      setTimeout(() => saveEbookToLocalStorage(), 100);
+      
+      setTimeout(() => saveEbookToLocalStorage(), 0);
 
     } catch (error) {
       console.error("Error generating structure", error);
@@ -247,7 +286,6 @@ const App: React.FC = () => {
         c.id === chapterId ? { ...c, content: newContent } : c
       )
     }));
-    // Note: We rely on interval autosave for content updates to avoid excessive writes
   };
 
   const handleGenerateChapter = async (chapterId: string, instructions?: string, length?: 'short' | 'medium' | 'long') => {
@@ -283,7 +321,6 @@ const App: React.FC = () => {
         ...prev,
         chapters: prev.chapters.map(c => c.id === chapterId ? { ...c, status: 'completed' } : c)
       }));
-      // Explicit save after generation completes
       setTimeout(() => saveEbookToLocalStorage(), 100);
 
     } catch (e) {
@@ -317,31 +354,60 @@ const App: React.FC = () => {
     }
   };
 
-  // --- Render ---
+  const handleUpdateExtras = (updates: Partial<ExtrasData>) => {
+    setEbookData(prev => {
+      if (!prev.extras) return prev;
+      return {
+        ...prev,
+        extras: { ...prev.extras, ...updates }
+      };
+    });
+  };
+
+  // Filter ebooks for the dashboard (Admin sees all, User sees own)
+  const visibleEbooks = currentUser.role === 'admin' 
+    ? allEbooks 
+    : allEbooks.filter(e => e.ownerId === currentUser.id);
 
   return (
     <Layout 
       currentPhase={phase} 
-      ebookTitle={phase !== AppPhase.DASHBOARD ? ebookData.title : undefined}
+      ebookTitle={phase !== AppPhase.DASHBOARD && phase !== AppPhase.ADMIN ? ebookData.title : undefined}
       onGoToDashboard={handleGoToDashboard}
+      user={currentUser}
+      onLogout={handleLogout}
+      onGoToAdmin={handleGoToAdmin}
     >
-      {/* Dashboard Placeholder / Component */}
       {phase === AppPhase.DASHBOARD && (
         <Dashboard 
-          savedEbooks={allEbooks}
+          savedEbooks={visibleEbooks}
           onNewEbook={handleStartNew}
           onOpenEbook={handleOpenEbook}
           onDeleteEbook={handleDeleteEbook}
           onStartFromIdea={handleStartFromIdea}
         />
       )}
-
-      {/* Phase 1: Briefing Placeholder / Component */}
-      {phase === AppPhase.BRIEFING && (
-        <PhaseBriefing onNext={handleBriefingSubmit} isGenerating={isGenerating} />
+      
+      {phase === AppPhase.ADMIN && currentUser.role === 'admin' && (
+        <AdminPanel 
+          users={allUsers}
+          allEbooks={allEbooks}
+          onRefreshData={() => {
+             setAllUsers(getAllUsers());
+             loadEbooks(); // Reload ebooks in case admin deleted something
+          }}
+          onDeleteEbook={handleDeleteEbook}
+        />
       )}
 
-      {/* Phase 2: Structure Placeholder / Component */}
+      {phase === AppPhase.BRIEFING && (
+        <PhaseBriefing 
+          onNext={handleBriefingSubmit} 
+          isGenerating={isGenerating} 
+          initialData={briefing}
+        />
+      )}
+
       {phase === AppPhase.STRUCTURE && (
         <PhaseStructure 
           title={ebookData.title}
@@ -352,7 +418,6 @@ const App: React.FC = () => {
         />
       )}
 
-      {/* Phase 3: Writing Placeholder / Component */}
       {phase === AppPhase.WRITING && (
         <PhaseWriting 
           chapters={ebookData.chapters}
@@ -366,12 +431,13 @@ const App: React.FC = () => {
         />
       )}
 
-      {/* Phase 4: Extras Placeholder / Component */}
       {phase === AppPhase.EXTRAS && (
         <PhaseExtras 
           ebookData={ebookData}
           isGenerating={isGenerating}
           onGenerateExtras={handleGenerateExtras}
+          onChangePhase={setPhase}
+          onUpdateExtras={handleUpdateExtras}
         />
       )}
     </Layout>

@@ -5,6 +5,7 @@ export enum AppPhase {
   STRUCTURE = 'STRUCTURE',
   WRITING = 'WRITING',
   EXTRAS = 'EXTRAS',
+  ADMIN = 'ADMIN', // New phase for database management
 }
 
 export interface BriefingData {
@@ -14,6 +15,9 @@ export interface BriefingData {
   tone: string;
   authorName: string;
   targetLength: 'short' | 'medium' | 'long';
+  chapterCount: number;
+  language: 'pl' | 'en'; // Added language field
+  contextMaterial?: string; // New: Source material from PDF/Youtube/Text
 }
 
 export interface Chapter {
@@ -24,21 +28,75 @@ export interface Chapter {
   status: 'pending' | 'generating' | 'completed';
 }
 
+export interface TrainingLesson {
+  title: string;
+  duration: string;
+  keyTakeaways: string[];
+  activity: string;
+}
+
+export interface TrainingModule {
+  title: string;
+  objective: string;
+  lessons: TrainingLesson[];
+}
+
+export interface TrainingQuiz {
+  question: string;
+  options: string[];
+  correctAnswer: string;
+}
+
+export interface TrainingCourse {
+  title: string;
+  description: string;
+  targetAudience: string;
+  totalDuration: string;
+  modules: TrainingModule[];
+  quiz: TrainingQuiz[];
+}
+
 export interface ExtrasData {
   marketingBlurb: string;
-  shortDescription: string;
-  longDescription: string;
+  shortDescription: string; // Max 100 chars (Hook)
+  mediumDescription?: string; // Max 200 chars (Problem/Solution)
+  longDescription: string; // Full Promo
   checklist: string;
   alternativeTitles: string[];
+  faq?: { question: string; answer: string }[]; 
+  purchaseLink?: string; // New field for custom CTA link
+  qrCodeUrl?: string; // Generated QR Code URL
+  trainingCourse?: TrainingCourse; // New field for Training Course
+  audiobookUrl?: string; // Generated Audio/WAV URL
+  audioVoice?: string; // Selected Voice Name
   imagePrompts: {
     cover: string;
     box3d: string;
     tocBackground: string;
     pageBackground: string;
+    chapterImages?: string[]; 
+  };
+  viralVideoPrompts?: { 
+    youtube: string;
+    tiktok: string;
+    instagram: string;
+    facebookAds: string;
   };
 }
 
-export type FontType = 'serif' | 'sans' | 'mono' | 'lato' | 'merriweather' | 'playfair' | 'oswald' | 'raleway';
+export type FontType = 
+  | 'serif' | 'sans' | 'mono' 
+  | 'lato' | 'merriweather' | 'playfair' | 'oswald' | 'raleway'
+  // Romantic
+  | 'greatvibes' | 'parisienne'
+  // Feminine
+  | 'cormorant' | 'cinzel'
+  // Technical
+  | 'robotomono' | 'orbitron'
+  // Masculine
+  | 'bebas' | 'anton'
+  // Childish
+  | 'patrick' | 'fredoka';
 
 export interface EbookData {
   id: string;
@@ -67,6 +125,7 @@ export interface NicheIdea {
   audience: string;
   problem: string;
   reason: string;
+  sources?: string[]; 
 }
 
 export interface User {
@@ -77,3 +136,9 @@ export interface User {
   joinedAt: number;
   avatarUrl: string;
 }
+
+declare var htmlDocx: any;
+declare var mammoth: any;
+declare var pdfjsLib: any;
+declare var html2pdf: any;
+declare var pdfMake: any;

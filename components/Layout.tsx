@@ -1,13 +1,16 @@
 
 import React from 'react';
-import { BookOpen, Layers, PenTool, Sparkles, AlertCircle, LayoutDashboard } from 'lucide-react';
-import { AppPhase } from '../types';
+import { BookOpen, Layers, PenTool, Sparkles, AlertCircle, LayoutDashboard, Shield } from 'lucide-react';
+import { AppPhase, User } from '../types';
 
 interface LayoutProps {
   currentPhase: AppPhase;
   children: React.ReactNode;
   ebookTitle?: string;
   onGoToDashboard: () => void;
+  user: User;
+  onLogout: () => void;
+  onGoToAdmin: () => void;
 }
 
 const steps = [
@@ -21,14 +24,18 @@ export const Layout: React.FC<LayoutProps> = ({
   currentPhase, 
   children, 
   ebookTitle, 
-  onGoToDashboard
+  onGoToDashboard,
+  user,
+  onLogout,
+  onGoToAdmin
 }) => {
   const isDashboard = currentPhase === AppPhase.DASHBOARD;
+  const isAdminPanel = currentPhase === AppPhase.ADMIN;
   
   return (
     <div className="flex h-screen bg-gray-50">
       {/* Sidebar */}
-      <aside className="w-20 lg:w-64 bg-slate-900 text-white flex flex-col transition-all duration-300">
+      <aside className="w-20 lg:w-64 bg-slate-900 text-white flex flex-col transition-all duration-300 shadow-xl z-20">
         <div className="h-16 flex items-center justify-center lg:justify-start lg:px-6 border-b border-slate-700 cursor-pointer" onClick={onGoToDashboard}>
           <BookOpen className="w-8 h-8 text-blue-400" />
           <span className="hidden lg:block ml-3 font-bold text-lg tracking-tight">E-book Architect</span>
@@ -48,9 +55,23 @@ export const Layout: React.FC<LayoutProps> = ({
             <span className="hidden lg:block ml-3 font-medium text-sm">Dashboard</span>
           </div>
 
+          {user.role === 'admin' && (
+            <div
+              onClick={onGoToAdmin}
+              className={`flex items-center px-4 py-3 mx-2 rounded-lg transition-colors cursor-pointer ${
+                isAdminPanel
+                  ? 'bg-red-900 text-white border-l-4 border-red-500'
+                  : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+              }`}
+            >
+              <Shield className="w-6 h-6" />
+              <span className="hidden lg:block ml-3 font-medium text-sm">Panel Admina</span>
+            </div>
+          )}
+
           <div className="my-4 border-t border-slate-800 mx-4"></div>
 
-          {!isDashboard && (
+          {!isDashboard && !isAdminPanel && (
              <>
                <div className="px-6 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider hidden lg:block">
                  Aktualny Projekt
@@ -84,16 +105,31 @@ export const Layout: React.FC<LayoutProps> = ({
           )}
         </nav>
         
-        {ebookTitle && !isDashboard && (
-          <div className="hidden lg:block p-6 text-xs text-slate-400 border-t border-slate-800">
+        {ebookTitle && !isDashboard && !isAdminPanel && (
+          <div className="hidden lg:block p-6 text-xs text-slate-400 border-t border-slate-800 bg-slate-800/50">
             <p className="uppercase tracking-wider font-semibold mb-1 text-slate-500">Edytujesz</p>
             <p className="line-clamp-2 text-white font-medium">{ebookTitle}</p>
           </div>
         )}
+
+        {/* User Profile Footer */}
+        <div className="p-4 border-t border-slate-700 bg-slate-900">
+           <div className="flex items-center">
+             <img 
+               src={user.avatarUrl} 
+               alt={user.name} 
+               className="w-10 h-10 rounded-full border-2 border-slate-600"
+             />
+             <div className="ml-3 hidden lg:block min-w-0">
+               <p className="text-sm font-bold text-white truncate">{user.name}</p>
+               <p className="text-xs text-slate-400 truncate">{user.role === 'admin' ? 'Administrator' : 'Użytkownik'}</p>
+             </div>
+           </div>
+        </div>
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
         {children}
       </main>
     </div>

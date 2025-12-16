@@ -1,18 +1,39 @@
+
 import React, { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Chapter } from '../types';
-import { Loader2, CheckCircle, Circle, PlayCircle, X, MessageSquarePlus, AlignLeft, Save, Edit2, Eye } from 'lucide-react';
+import { Loader2, CheckCircle, Circle, PlayCircle, X, MessageSquarePlus, AlignLeft, Save, Edit2, Eye, BarChart2 } from 'lucide-react';
+import remarkGfm from 'remark-gfm';
+import mermaid from 'mermaid';
 
 interface PhaseWritingProps {
   chapters: Chapter[];
   currentChapterId: string | null;
   onSelectChapter: (id: string) => void;
-  onGenerateChapter: (id: string, instructions?: string, length?: 'short' | 'medium' | 'long') => void;
+  onGenerateChapter: (id: string, instructions?: string, length?: 'short' | 'medium' | 'long' | 'very_long') => void;
   onUpdateContent: (id: string, content: string) => void;
   onNextPhase: () => void;
   isGenerating: boolean;
   lastSaved: number | null;
 }
+
+// Mermaid component for rendering charts in Writing Phase
+const Mermaid = ({ chart }: { chart: string }) => {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (ref.current && chart) {
+      mermaid.initialize({ startOnLoad: true, theme: 'default' });
+      mermaid.run({ nodes: [ref.current] });
+    }
+  }, [chart]);
+
+  return (
+    <div className="mermaid bg-white p-4 rounded-lg shadow-sm border border-gray-100 flex justify-center my-4" ref={ref}>
+      {chart}
+    </div>
+  );
+};
 
 export const PhaseWriting: React.FC<PhaseWritingProps> = ({
   chapters,
@@ -31,7 +52,7 @@ export const PhaseWriting: React.FC<PhaseWritingProps> = ({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [instructions, setInstructions] = useState('');
-  const [chapterLength, setChapterLength] = useState<'short' | 'medium' | 'long'>('medium');
+  const [chapterLength, setChapterLength] = useState<'short' | 'medium' | 'long' | 'very_long'>('medium');
 
   // Auto-scroll only when generating
   useEffect(() => {
@@ -41,8 +62,9 @@ export const PhaseWriting: React.FC<PhaseWritingProps> = ({
   }, [activeChapter?.content, activeChapter?.status]);
 
   const handleOpenGenerationModal = () => {
-    setInstructions('');
-    setChapterLength('medium'); // default reset
+    // Default suggestion for stats
+    setInstructions('- Zawrzyj tabelę z danymi statystycznymi lub diagramem.\n');
+    setChapterLength('medium'); 
     setIsModalOpen(true);
   };
 
@@ -50,7 +72,7 @@ export const PhaseWriting: React.FC<PhaseWritingProps> = ({
     if (activeChapter) {
       onGenerateChapter(activeChapter.id, instructions, chapterLength);
       setIsModalOpen(false);
-      setIsEditing(false); // Switch to preview on generate
+      setIsEditing(false); 
     }
   };
 
@@ -69,13 +91,14 @@ export const PhaseWriting: React.FC<PhaseWritingProps> = ({
             <button
               key={chapter.id}
               onClick={() => onSelectChapter(chapter.id)}
-              className={`w-full text-left p-3 rounded-lg border transition-all flex items-center group ${
+              style={{ animationDelay: `${index * 75}ms` }}
+              className={`w-full text-left p-3 rounded-lg border transition-all flex items-start group animate-in fade-in slide-in-from-left-4 duration-500 fill-mode-backwards ${
                 chapter.id === currentChapterId
                   ? 'border-blue-500 bg-blue-50 shadow-sm ring-1 ring-blue-500'
                   : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'
               }`}
             >
-              <div className="mr-3">
+              <div className="mr-3 mt-0.5 flex-shrink-0">
                 {chapter.status === 'completed' ? (
                   <CheckCircle className="w-5 h-5 text-green-500" />
                 ) : chapter.status === 'generating' ? (
@@ -84,9 +107,9 @@ export const PhaseWriting: React.FC<PhaseWritingProps> = ({
                   <Circle className="w-5 h-5 text-gray-300 group-hover:text-gray-400" />
                 )}
               </div>
-              <div>
+              <div className="min-w-0">
                 <span className="text-xs font-semibold text-gray-500 block mb-0.5">Rozdział {index + 1}</span>
-                <span className={`text-sm font-medium block truncate ${chapter.id === currentChapterId ? 'text-blue-900' : 'text-gray-700'}`}>
+                <span className={`text-sm font-medium block whitespace-normal break-words leading-tight ${chapter.id === currentChapterId ? 'text-blue-900' : 'text-gray-700'}`}>
                   {chapter.title}
                 </span>
               </div>
@@ -186,7 +209,21 @@ export const PhaseWriting: React.FC<PhaseWritingProps> = ({
                  <div ref={scrollRef} className="h-full overflow-y-auto p-8 lg:p-12">
                    {activeChapter.content ? (
                      <div className="prose prose-lg prose-indigo max-w-none text-gray-800">
-                       <ReactMarkdown>{activeChapter.content}</ReactMarkdown>
+                       <ReactMarkdown
+                         remarkPlugins={[remarkGfm]}
+                         components={{
+                            code(props) {
+                              const {children, className, node, ...rest} = props;
+                              const match = /language-(\w+)/.exec(className || '');
+                              if (match && match[1] === 'mermaid') {
+                                return <Mermaid chart={String(children).replace(/\n$/, '')} />;
+                              }
+                              return <code {...rest} className={className}>{children}</code>;
+                            }
+                         }}
+                       >
+                         {activeChapter.content}
+                       </ReactMarkdown>
                      </div>
                    ) : (
                      <div className="h-full flex items-center justify-center text-gray-300 italic">
@@ -222,22 +259,23 @@ export const PhaseWriting: React.FC<PhaseWritingProps> = ({
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2 flex items-center">
                   <AlignLeft className="w-4 h-4 mr-2 text-blue-500" />
-                  Długość (ilość znaków)
+                  Długość (szacunkowa)
                 </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['short', 'medium', 'long'] as const).map((len) => (
+                <div className="grid grid-cols-2 gap-2">
+                  {(['short', 'medium', 'long', 'very_long'] as const).map((len) => (
                     <button
                       key={len}
                       onClick={() => setChapterLength(len)}
-                      className={`py-2 px-3 text-sm font-medium rounded-lg border transition-all ${
+                      className={`py-2 px-3 text-xs sm:text-sm font-medium rounded-lg border transition-all ${
                         chapterLength === len
-                          ? 'bg-blue-50 border-blue-500 text-blue-700'
+                          ? 'bg-blue-50 border-blue-500 text-blue-700 shadow-sm'
                           : 'border-gray-200 text-gray-600 hover:bg-gray-50'
                       }`}
                     >
-                      {len === 'short' && 'Krótki (~800)'}
-                      {len === 'medium' && 'Standard (~1500)'}
-                      {len === 'long' && 'Długi (2000+)'}
+                      {len === 'short' && 'Krótki (~800 zn)'}
+                      {len === 'medium' && 'Standard (~1500 zn)'}
+                      {len === 'long' && 'Długi (~2500 zn)'}
+                      {len === 'very_long' && 'Bardzo długi (~5000 zn)'}
                     </button>
                   ))}
                 </div>
@@ -246,14 +284,18 @@ export const PhaseWriting: React.FC<PhaseWritingProps> = ({
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2 flex items-center">
                   <MessageSquarePlus className="w-4 h-4 mr-2 text-blue-500" />
-                  Kluczowe punkty / Outline (Opcjonalnie)
+                  Kluczowe punkty / Outline
                 </label>
                 <textarea
                   value={instructions}
                   onChange={(e) => setInstructions(e.target.value)}
                   className="w-full h-32 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none text-sm outline-none"
-                  placeholder="- Wspomnij o technice Pomodoro&#10;- Podaj przykład z branży IT&#10;- Unikaj zbyt formalnego języka..."
+                  placeholder="- Wspomnij o..."
                 />
+                <p className="text-xs text-gray-400 mt-2 flex items-center">
+                   <BarChart2 className="w-3 h-3 mr-1" />
+                   Sugestia: Pozostaw domyślne, aby wygenerować statystyki i diagramy.
+                </p>
               </div>
             </div>
 

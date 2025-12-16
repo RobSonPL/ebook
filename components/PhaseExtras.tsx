@@ -1,686 +1,589 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  BookOpen, Sparkles, Layers, FileDown, Copy, Megaphone, 
+  Palette, GraduationCap, Headphones, ArrowRight, Download, 
+  RefreshCw, Upload as UploadIcon
+} from 'lucide-react';
+import { EbookData, ExtrasData, AppPhase, TrainingCourse } from '../types';
+import { generateImage, generateImageVariations, generateAudiobook, generateCourse } from '../services/geminiService';
 
-import React, { useEffect, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import { Loader2, Copy, Sparkles, BookText, Facebook, Twitter, Linkedin, Printer, Type, Image as ImageIcon, FileText, Share, Mail, Share2 } from 'lucide-react';
-import { EbookData, FontType } from '../types';
+declare var pdfMake: any;
 
 interface PhaseExtrasProps {
   ebookData: EbookData;
   isGenerating: boolean;
   onGenerateExtras: () => void;
+  onChangePhase: (phase: AppPhase) => void;
+  onUpdateExtras: (updates: Partial<ExtrasData>) => void;
 }
 
-export const PhaseExtras: React.FC<PhaseExtrasProps> = ({ ebookData, isGenerating, onGenerateExtras }) => {
-  const [activeTab, setActiveTab] = useState<'marketing' | 'ebook'>('marketing');
-  const [copied, setCopied] = useState(false);
-  const [font, setFont] = useState<FontType>('serif');
+// Helpers
+const processTextForPdf = (text: string, style: string) => {
+    return text.replace(/[*_#`]/g, '');
+};
 
+const parseMarkdownTableToPdfMake = (markdownTable: string) => {
+    const rows = markdownTable.trim().split('\n');
+    const body = rows.map(row => {
+        return row.split('|').filter(cell => cell.trim() !== '').map(cell => ({ text: cell.trim(), style: 'tableCell' }));
+    });
+    // Remove separator row if exists (usually starts with |-)
+    const cleanBody = body.filter(row => !row[0]?.text.match(/^[:\-]*/));
+
+    return {
+        table: {
+            headerRows: 1,
+            widths: Array(cleanBody[0]?.length || 1).fill('*'),
+            body: cleanBody
+        },
+        layout: 'lightHorizontalLines',
+        margin: [0, 10, 0, 10]
+    };
+};
+
+export const PhaseExtras: React.FC<PhaseExtrasProps> = ({ 
+  ebookData, 
+  isGenerating, 
+  onGenerateExtras, 
+  onChangePhase, 
+  onUpdateExtras 
+}) => {
+  const [activeTab, setActiveTab] = useState<'marketing' | 'ebook' | 'training' | 'audio'>('marketing');
+  
+  // Local state for generated assets
+  const [uploadedImages, setUploadedImages] = useState<Record<string, string>>({});
+  const [coverVariations, setCoverVariations] = useState<string[]>([]);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  
+  const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
+  
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
+  const [selectedVoice, setSelectedVoice] = useState('Kore');
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const [isGeneratingCourse, setIsGeneratingCourse] = useState(false);
+
+  // Load existing data
   useEffect(() => {
-    if (activeTab === 'marketing' && !ebookData.extras && !isGenerating) {
-      onGenerateExtras();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
+     if (ebookData.extras?.qrCodeUrl) setQrCodeUrl(ebookData.extras.qrCodeUrl);
+     if (ebookData.extras?.audiobookUrl) setAudioUrl(ebookData.extras.audiobookUrl);
+  }, [ebookData.extras]);
 
+  // Handlers
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    alert("Skopiowano do schowka!");
   };
 
-  const handleShareSocial = (platform: 'twitter' | 'facebook' | 'linkedin' | 'email' | 'pinterest') => {
-    const text = encodeURIComponent(ebookData.extras?.marketingBlurb || `Sprawdź mój nowy e-book: ${ebookData.title}`);
-    const url = encodeURIComponent(window.location.href); 
-    
-    let shareUrl = '';
-    switch (platform) {
-      case 'twitter':
-        shareUrl = `https://twitter.com/intent/tweet?text=${text}`;
-        window.open(shareUrl, '_blank', 'width=600,height=400');
-        break;
-      case 'facebook':
-        shareUrl = `https://www.facebook.com/sharer/sharer.php?u=${url}`;
-        window.open(shareUrl, '_blank', 'width=600,height=400');
-        break;
-      case 'linkedin':
-        shareUrl = `https://www.linkedin.com/sharing/share-offsite/?url=${url}`;
-        window.open(shareUrl, '_blank', 'width=600,height=400');
-        break;
-      case 'pinterest':
-        shareUrl = `https://pinterest.com/pin/create/button/?url=${url}&description=${text}`;
-        window.open(shareUrl, '_blank', 'width=600,height=400');
-        break;
-      case 'email':
-        shareUrl = `mailto:?subject=${encodeURIComponent(ebookData.title)}&body=${text}%0A%0A${url}`;
-        window.location.href = shareUrl;
-        break;
-    }
+  const handleCopyTeaserText = () => {
+      const text = ebookData.chapters.slice(0, 2).map(c => `## ${c.title}\n\n${c.content}`).join('\n\n');
+      handleCopy(text);
   };
 
-  const handleShareFile = async () => {
-    if (!navigator.share) {
-      alert("Twoja przeglądarka nie obsługuje udostępniania plików.");
-      return;
-    }
+  const handleGenerateImage = async (key: string, prompt: string) => {
+      // Fallback prompt for backgrounds if not provided
+      if (!prompt && (key === 'pageBackground' || key === 'tocBackground')) {
+          prompt = "Abstract subtle light texture, minimalist background";
+      }
 
-    try {
-      const fullText = `# ${ebookData.title}\n\n${ebookData.chapters.map(c => `## ${c.title}\n\n${c.content}`).join('\n\n')}`;
-      const file = new File([fullText], `${ebookData.title.replace(/\s+/g, '_')}.md`, { type: 'text/markdown' });
+      if (!prompt) {
+          alert("Brak promptu. Wygeneruj najpierw pakiet marketingowy.");
+          return;
+      }
+      setIsGeneratingImage(true);
       
-      await navigator.share({
-        title: ebookData.title,
-        text: ebookData.extras?.shortDescription,
-        files: [file]
+      let finalPrompt = prompt;
+      // ENFORCE: Light background, no text for page backgrounds
+      if (key === 'pageBackground' || key === 'tocBackground') {
+          finalPrompt += " . High brightness, white background, very light opacity, subtle abstract texture, NO TEXT, NO LETTERS, clean minimalist style, watermark-free, paper texture.";
+      }
+
+      try {
+          const img = await generateImage(finalPrompt);
+          setUploadedImages(prev => ({ ...prev, [key]: img }));
+      } catch (e) {
+          console.error(e);
+          alert("Błąd generowania obrazu.");
+      } finally {
+          setIsGeneratingImage(false);
+      }
+  };
+
+  const handleGenerateCoverVariations = async (prompt: string) => {
+      if (!prompt) return;
+      setIsGeneratingImage(true);
+      try {
+          const imgs = await generateImageVariations(prompt, 4);
+          setCoverVariations(imgs);
+      } catch (e) {
+          console.error(e);
+          alert("Błąd generowania wariantów.");
+      } finally {
+          setIsGeneratingImage(false);
+      }
+  };
+
+  const handleSelectVariation = (img: string) => {
+      setUploadedImages(prev => ({ ...prev, 'cover': img }));
+  };
+
+  const handleImageUpload = (key: string, file: File) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+          if (e.target?.result) {
+              setUploadedImages(prev => ({ ...prev, [key]: e.target!.result as string }));
+          }
+      };
+      reader.readAsDataURL(file);
+  };
+  
+  // PDF Logic
+  const createPdfDocDefinition = (isTeaser: boolean) => {
+      const author = ebookData.briefing?.authorName || "Synapse Creative";
+      const currentYear = new Date().getFullYear();
+      const purchaseLink = ebookData.extras?.purchaseLink || 'https://www.naffy.io/Synapse_Creative';
+
+      const docContent: any[] = [];
+      
+      // Cover Page
+      if (uploadedImages['cover']) {
+        docContent.push({
+            image: uploadedImages['cover'],
+            width: 500,
+            alignment: 'center',
+            margin: [0, 20, 0, 20]
+        });
+      }
+      docContent.push({ text: processTextForPdf(ebookData.title, 'coverTitle'), style: 'coverTitle', margin: [0, 20, 0, 10], alignment: 'center' });
+      docContent.push({ text: ebookData.briefing?.topic || '', style: 'coverSubtitle', margin: [0, 0, 0, 40] });
+      docContent.push({ text: author, style: 'coverAuthor', margin: [0, 200, 0, 5] });
+
+      if (isTeaser) {
+           docContent.push({ text: processTextForPdf('DARMOWY FRAGMENT 🚀', 'teaserLabel'), style: 'teaserLabel', alignment: 'center', margin: [0, 10, 0, 0] });
+      } else {
+           docContent.push({ text: `${currentYear}`, style: 'normal', alignment: 'center' });
+      }
+
+      // Page Break
+      docContent.push({ text: '', pageBreak: 'after' });
+      
+      // TOC
+      docContent.push({ text: 'Spis Treści', style: 'header', alignment: 'center', margin: [0, 0, 0, 20] });
+      const tocList = ebookData.chapters.map((c, i) => ({
+        text: `${i + 1}. ${c.title} ${isTeaser && i > 1 ? '(W pełnej wersji)' : ''}`,
+        style: isTeaser && i > 1 ? 'dimmed' : 'tocItem',
+        margin: [0, 5, 0, 5]
+      }));
+      docContent.push({ ul: tocList, style: 'tocList' });
+      docContent.push({ text: '', pageBreak: 'after' });
+
+      // Chapters
+      const chaptersToInclude = isTeaser ? ebookData.chapters.slice(0, 2) : ebookData.chapters;
+      chaptersToInclude.forEach((chapter, index) => {
+         if (index > 0) docContent.push({ text: '', pageBreak: 'before' });
+         
+         docContent.push({ text: `Rozdział ${index + 1}`, style: 'chapterLabel' });
+         docContent.push({ text: chapter.title, style: 'header' });
+         
+         if (uploadedImages[`chapter-${index}`]) {
+             docContent.push({ image: uploadedImages[`chapter-${index}`], width: 400, alignment: 'center', margin: [0, 10, 0, 20] });
+         }
+
+         const paragraphs = chapter.content.split('\n\n');
+         paragraphs.forEach(para => {
+             const trimPara = para.trim();
+             if (trimPara.startsWith('|') && trimPara.includes('|') && trimPara.split('\n').length > 1) {
+                 const tableDef = parseMarkdownTableToPdfMake(trimPara);
+                 if (tableDef) { docContent.push(tableDef); return; }
+             }
+             if (para.startsWith('## ')) {
+               docContent.push({ text: para.replace('## ', ''), style: 'subheader' });
+             } else if (para.startsWith('### ')) {
+               docContent.push({ text: para.replace('### ', ''), style: 'subsubheader' });
+             } else {
+               docContent.push({ text: processTextForPdf(trimPara, 'normal'), style: 'normal' });
+             }
+         });
       });
-    } catch (err) {
-      console.error("Error sharing file:", err);
-    }
+
+      // CTA for Teaser / Extras for Full
+      if (isTeaser) {
+           docContent.push({ text: '', pageBreak: 'before' });
+           docContent.push({ text: 'KUP PEŁNĄ WERSJĘ', style: 'cta', link: purchaseLink, alignment: 'center', margin: [0, 20, 0, 0] });
+           if (qrCodeUrl) {
+               // Assuming qrCodeUrl is valid image data/url
+               try {
+                  docContent.push({ image: qrCodeUrl, width: 150, alignment: 'center', margin: [0, 10, 0, 0] });
+               } catch(e) {}
+           }
+      } else {
+           if (ebookData.extras?.checklist) {
+               docContent.push({ text: '', pageBreak: 'before' });
+               docContent.push({ text: 'Checklista ✅', style: 'header' });
+               const items = ebookData.extras.checklist.split('\n').filter(l => l.trim().length > 0);
+               docContent.push({ ul: items, margin: [0, 10, 0, 0] });
+           }
+      }
+
+      // Background logic
+      const background = (currentPage: number) => {
+          if (currentPage > 1 && uploadedImages['pageBackground']) {
+              return {
+                 image: uploadedImages['pageBackground'],
+                 width: 595.28,
+                 height: 841.89,
+                 absolutePosition: { x: 0, y: 0 }
+              };
+          }
+          return null; // White background by default
+      };
+
+      return {
+          content: docContent,
+          background: background,
+          styles: {
+            header: { fontSize: 24, bold: true, margin: [0, 20, 0, 10], color: '#111827' },
+            subheader: { fontSize: 18, bold: true, margin: [0, 15, 0, 8], color: '#374151' },
+            subsubheader: { fontSize: 14, bold: true, margin: [0, 10, 0, 5], color: '#4b5563' },
+            normal: { fontSize: 11, margin: [0, 0, 0, 12], alignment: 'justify', lineHeight: 1.4, color: '#374151' },
+            coverTitle: { fontSize: 36, bold: true, alignment: 'center', color: '#111827' },
+            coverSubtitle: { fontSize: 18, alignment: 'center', color: '#4b5563' },
+            coverAuthor: { fontSize: 16, bold: true, alignment: 'center', color: '#374151' },
+            teaserLabel: { fontSize: 14, bold: true, color: '#dc2626', alignment: 'center' },
+            chapterLabel: { fontSize: 10, bold: true, color: '#9ca3af', margin: [0, 40, 0, 0] },
+            tocItem: { fontSize: 12, margin: [0, 5, 0, 5], color: '#374151' },
+            dimmed: { fontSize: 10, color: '#9ca3af' },
+            cta: { fontSize: 18, bold: true, color: '#2563eb', decoration: 'underline' },
+            tableCell: { fontSize: 10, color: '#374151', margin: [0, 5, 0, 5] },
+            tocList: { markerColor: '#2563eb' }
+          },
+          defaultStyle: { font: 'Roboto' }
+      };
   };
 
-  const handleExportWord = () => {
-    const author = ebookData.briefing?.authorName || "Autor";
-    const year = new Date().getFullYear();
-    const safeTitle = ebookData.title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+  const handleExportPDF = () => {
+      if (typeof pdfMake === 'undefined') { alert("Brak biblioteki PDF"); return; }
+      try {
+        const dd = createPdfDocDefinition(false);
+        pdfMake.createPdf(dd).download(`${ebookData.title.replace(/[^a-z0-9]/gi, '_')}.pdf`);
+      } catch (e) { console.error(e); alert("Błąd generowania PDF"); }
+  };
 
-    // Map internal font keys to CSS font-family stacks
-    const fontMap: Record<FontType, string> = {
-      sans: 'Arial, Helvetica, sans-serif',
-      serif: 'Times New Roman, serif',
-      mono: '"Courier New", Courier, monospace',
-      lato: '"Lato", Calibri, sans-serif',
-      merriweather: '"Merriweather", Georgia, serif',
-      playfair: '"Playfair Display", "Times New Roman", serif',
-      oswald: '"Oswald", Impact, sans-serif',
-      raleway: '"Raleway", Verdana, sans-serif'
-    };
+  const handleExportTeaserPDF = () => {
+      if (typeof pdfMake === 'undefined') { alert("Brak biblioteki PDF"); return; }
+      try {
+        const dd = createPdfDocDefinition(true);
+        pdfMake.createPdf(dd).download(`${ebookData.title.replace(/[^a-z0-9]/gi, '_')}_TEASER.pdf`);
+      } catch (e) { console.error(e); alert("Błąd generowania PDF"); }
+  };
 
-    const chosenFont = fontMap[font];
+  const handleGenerateAudio = async () => {
+      setIsGeneratingAudio(true);
+      try {
+          // Flatten text
+          const fullText = ebookData.chapters.map(c => c.title + ". " + c.content).join("\n\n");
+          // Generate - using a chunk for demo
+          const url = await generateAudiobook(fullText.substring(0, 2000), selectedVoice); 
+          setAudioUrl(url);
+          onUpdateExtras({ audiobookUrl: url, audioVoice: selectedVoice });
+      } catch (e) {
+          console.error(e);
+          alert("Błąd generowania audio.");
+      } finally {
+          setIsGeneratingAudio(false);
+      }
+  };
 
-    // Rich HTML Template optimized for Word
-    const htmlContent = `
-      <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-      <head>
-        <meta charset='utf-8'>
-        <title>${ebookData.title}</title>
-        <!--[if gte mso 9]>
-        <xml>
-        <w:WordDocument>
-        <w:View>Print</w:View>
-        <w:Zoom>100</w:Zoom>
-        <w:DoNotOptimizeForBrowser/>
-        </w:WordDocument>
-        </xml>
-        <![endif]-->
-        <style>
-          @import url('https://fonts.googleapis.com/css2?family=Lato:wght@400;700&family=Merriweather:wght@300;700&family=Oswald:wght@400;700&family=Playfair+Display:wght@400;700&family=Raleway:wght@400;700&display=swap');
-          
-          /* Page Setup */
-          @page {
-            size: 21cm 29.7cm;
-            margin: 2.5cm 2.5cm 2.5cm 2.5cm;
-            mso-page-orientation: portrait;
-            mso-header-margin: 1.25cm;
-            mso-footer-margin: 1.25cm;
-            mso-footer: f1;
-          }
+  const handleGenerateTraining = async () => {
+      if (!ebookData.briefing) return;
+      setIsGeneratingCourse(true);
+      try {
+          const course = await generateCourse(ebookData.briefing, ebookData.title, ebookData.chapters);
+          onUpdateExtras({ trainingCourse: course });
+      } catch (e) {
+          console.error(e);
+          alert("Błąd generowania kursu.");
+      } finally {
+          setIsGeneratingCourse(false);
+      }
+  };
 
-          body { 
-            font-family: ${chosenFont}; 
-            line-height: 1.5; 
-            color: #000000;
-            font-size: 11pt;
-            background-color: white;
-          }
-
-          /* Refined Headings Structure */
-          h1 { 
-            font-size: 26pt; 
-            font-weight: bold; 
-            margin-top: 0; 
-            margin-bottom: 24pt; 
-            line-height: 1.2; 
-            color: #111827; 
-            page-break-after: avoid; 
-            mso-outline-level: 1;
-          }
-          
-          h2 { 
-            font-size: 20pt; 
-            font-weight: bold; 
-            margin-top: 24pt; 
-            margin-bottom: 12pt; 
-            line-height: 1.3; 
-            color: #111827; 
-            page-break-after: avoid; 
-            border-bottom: 1px solid #e5e7eb;
-            padding-bottom: 6pt;
-            mso-outline-level: 2;
-          }
-          
-          h3 { 
-            font-size: 16pt; 
-            font-weight: bold; 
-            margin-top: 18pt; 
-            margin-bottom: 8pt; 
-            line-height: 1.4; 
-            color: #374151; 
-            page-break-after: avoid; 
-            mso-outline-level: 3;
-          }
-          
-          /* Text */
-          p { margin-top: 0; margin-bottom: 12pt; text-align: justify; widows: 2; orphans: 2; }
-          ul, ol { margin-top: 0; margin-bottom: 12pt; margin-left: 24pt; }
-          li { margin-bottom: 4pt; }
-          a { color: #2563eb; text-decoration: underline; }
-          blockquote { border-left: 4px solid #e5e7eb; padding-left: 12pt; margin-left: 12pt; margin-top: 12pt; margin-bottom: 12pt; color: #4b5563; font-style: italic; }
-          
-          /* Tables */
-          table { width: 100%; border-collapse: collapse; margin-bottom: 12pt; }
-          th, td { border: 1px solid #d1d5db; padding: 8pt; text-align: left; vertical-align: top; }
-          th { background-color: #f9fafb; font-weight: bold; }
-
-          /* Layout Utilities for Word */
-          .page-break { page-break-before: always; }
-          
-          /* Cover Page */
-          table.cover-layout { width: 100%; height: 900px; border: none; }
-          table.cover-layout td { border: none; vertical-align: middle; text-align: center; }
-          
-          .cover-title { font-size: 42pt; font-weight: bold; color: #111827; margin-bottom: 12pt; line-height: 1.1; }
-          .cover-subtitle { font-size: 24pt; color: #4b5563; margin-bottom: 32pt; }
-          .cover-author { font-size: 18pt; font-weight: bold; color: #1f2937; }
-          .cover-year { font-size: 12pt; color: #9ca3af; margin-top: 8pt; }
-
-          /* Copyright Page */
-          .copyright-section { padding-top: 400pt; font-size: 10pt; color: #6b7280; }
-
-          /* TOC */
-          .toc-list { list-style-type: none; margin: 0; padding: 0; }
-          .toc-item { margin-bottom: 12pt; border-bottom: 1px dotted #e5e7eb; padding-bottom: 2pt; }
-
-          /* Chapter Styling */
-          .chapter-header { border-top: 4px solid #111827; padding-top: 12pt; margin-top: 32pt; margin-bottom: 12pt; }
-          .chapter-number { font-size: 10pt; font-weight: bold; text-transform: uppercase; color: #6b7280; letter-spacing: 2px; }
-          
-          /* Footer Content Style */
-          p.MsoFooter, li.MsoFooter, div.MsoFooter {
-            margin: 0cm;
-            margin-bottom: .0001pt;
-            font-size: 9.0pt;
-            font-family: ${chosenFont};
-            color: #9ca3af;
-            text-align: center;
-          }
-        </style>
-      </head>
-      <body>
-        
-        <!-- COVER PAGE -->
-        <table class="cover-layout">
-          <tr>
-            <td>
-              <div class="cover-title">${ebookData.title}</div>
-              <div class="cover-subtitle">${ebookData.briefing?.topic}</div>
-              <br/><br/>
-              <div class="cover-author">${author}</div>
-              <div class="cover-year">${year}</div>
-            </td>
-          </tr>
-        </table>
-        
-        <br class="page-break" />
-
-        <!-- COPYRIGHT PAGE -->
-        <div class="copyright-section">
-          <p>Copyright © ${year} ${author}. Wszelkie prawa zastrzeżone.</p>
-          <p>Żadna część tej publikacji nie może być powielana, przechowywana w systemie wyszukiwania ani przekazywana w jakiejkolwiek formie ani za pomocą jakichkolwiek środków elektronicznych, mechanicznych, fotokopii, nagrywania lub innych, bez uprzedniej pisemnej zgody wydawcy.</p>
-          <p>Informacje zawarte w tym e-booku mają charakter wyłącznie edukacyjny i nie zastępują profesjonalnej porady.</p>
-        </div>
-
-        <br class="page-break" />
-
-        <!-- TOC -->
-        <div>
-          <h1 style="text-align:center; border-bottom: 1px solid #e5e7eb; padding-bottom: 12pt; margin-bottom: 24pt;">Spis Treści</h1>
-          <ul class="toc-list">
-            ${ebookData.chapters.map((c, i) => `
-              <li class="toc-item">
-                <strong>Rozdział ${i+1}:</strong> ${c.title}
-              </li>
-            `).join('')}
-            ${ebookData.extras?.checklist ? `<li class="toc-item"><strong>Dodatek:</strong> Checklista - Action Plan</li>` : ''}
-          </ul>
-        </div>
-
-        <br class="page-break" />
-
-        <!-- CHAPTERS -->
-        ${ebookData.chapters.map((c, i) => {
-          let processedContent = c.content
-            .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-            .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-            .replace(/\*\*(.*)\*\*/gim, '<b>$1</b>')
-            .replace(/\*(.*)\*/gim, '<i>$1</i>')
-            .replace(/\[LINK: (.*?)\]/g, '<a href="#">$1</a>')
-            .replace(/\n\n/g, '</p><p>')
-            .replace(/\n/g, ' ');
-
-          if (!processedContent.startsWith('<')) processedContent = '<p>' + processedContent + '</p>';
-
-          return `
-            <div class="chapter">
-              <div class="chapter-header">
-                <span class="chapter-number">Rozdział ${i+1}</span>
+  const ImageUploadBox = ({ label, onUpload, currentImage, compact }: any) => (
+      <div className={`border-2 border-dashed border-gray-300 rounded-lg p-4 flex flex-col items-center justify-center cursor-pointer hover:bg-gray-50 ${compact ? 'h-32' : 'h-48'}`} onClick={() => document.getElementById(`file-${label}`)?.click()}>
+          <input id={`file-${label}`} type="file" className="hidden" accept="image/*" onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])} />
+          {currentImage ? (
+              <img src={currentImage} className="max-h-full max-w-full object-contain" />
+          ) : (
+              <div className="text-center text-gray-400">
+                  <UploadIcon className="w-8 h-8 mx-auto mb-2" />
+                  <span className="text-xs">{label}</span>
               </div>
-              <div style="font-size: 32pt; font-weight: bold; margin-bottom: 24pt; color: #111827; line-height: 1.1;">${c.title}</div>
-              <div class="content">${processedContent}</div>
-            </div>
-            <br class="page-break" />
-          `;
-        }).join('')}
-
-        <!-- CHECKLIST -->
-        ${ebookData.extras?.checklist ? `
-          <div class="checklist">
-             <div class="chapter-header">
-                <span class="chapter-number">Dodatek</span>
-             </div>
-             <div style="font-size: 32pt; font-weight: bold; margin-bottom: 24pt; color: #111827;">Checklista Podsumowująca</div>
-             <div>${ebookData.extras.checklist.replace(/\n/gim, '<br/>')}</div>
-          </div>
-          <br class="page-break" />
-        ` : ''}
-
-        <!-- BACK COVER -->
-        <table class="cover-layout" style="height: 600px; background-color: #f9fafb;">
-          <tr>
-            <td style="padding: 40pt;">
-              <h2 style="font-size: 24pt; border-bottom: 2px solid #e5e7eb; padding-bottom: 10pt; margin-top: 0;">O tym E-booku</h2>
-              <p style="font-size: 14pt; font-style: italic; margin-top: 20pt;">${ebookData.extras?.longDescription || ''}</p>
-              <br/>
-              <div style="margin-top: 40pt;">
-                <p><strong>${author}</strong></p>
-                <p style="color: #6b7280;">Ekspert w dziedzinie: ${ebookData.briefing?.topic}</p>
-              </div>
-            </td>
-          </tr>
-        </table>
-
-        <!-- FOOTER DEFINITION -->
-        <div style='mso-element:footer' id='f1'>
-          <p class=MsoFooter>
-            <span style='mso-field-code:" PAGE "'></span> / <span style='mso-field-code:" NUMPAGES "'></span> 
-            <span style='margin-left: 10px; margin-right: 10px;'>|</span>
-            ${ebookData.title} &mdash; ${author}
-          </p>
-        </div>
-
-      </body>
-      </html>
-    `;
-
-    const source = 'data:application/vnd.ms-word;charset=utf-8,' + encodeURIComponent(htmlContent);
-    const fileDownload = document.createElement("a");
-    document.body.appendChild(fileDownload);
-    fileDownload.href = source;
-    fileDownload.download = `${safeTitle}.doc`;
-    fileDownload.click();
-    document.body.removeChild(fileDownload);
-  };
-
-  const fontConfig: Record<FontType, { label: string, class: string, family: string }> = {
-    sans: { label: 'System Sans', class: 'font-sans', family: 'ui-sans-serif, system-ui' },
-    serif: { label: 'System Serif', class: 'font-serif', family: 'ui-serif, Georgia' },
-    mono: { label: 'Monospace', class: 'font-mono', family: 'ui-monospace, SFMono-Regular' },
-    lato: { label: 'Lato (Modern)', class: 'font-lato', family: "'Lato', sans-serif" },
-    merriweather: { label: 'Merriweather (Classic)', class: 'font-merriweather', family: "'Merriweather', serif" },
-    playfair: { label: 'Playfair (Elegant)', class: 'font-playfair', family: "'Playfair Display', serif" },
-    oswald: { label: 'Oswald (Bold)', class: 'font-oswald', family: "'Oswald', sans-serif" },
-    raleway: { label: 'Raleway (Clean)', class: 'font-raleway', family: "'Raleway', sans-serif" },
-  };
-
-  const currentYear = new Date().getFullYear();
-  const author = ebookData.briefing?.authorName || "Autor";
+          )}
+      </div>
+  );
 
   return (
-    <div className="flex-1 overflow-y-auto p-8 lg:p-12 bg-indigo-50">
-      
-      {/* Dynamic Font Styles */}
-      <style>
-        {`
-          @import url('https://fonts.googleapis.com/css2?family=Lato:wght@400;700&family=Merriweather:wght@300;700&family=Oswald:wght@400;700&family=Playfair+Display:wght@400;700&family=Raleway:wght@400;700&display=swap');
-          
-          .font-lato { font-family: 'Lato', sans-serif; }
-          .font-merriweather { font-family: 'Merriweather', serif; }
-          .font-playfair { font-family: 'Playfair Display', serif; }
-          .font-oswald { font-family: 'Oswald', sans-serif; }
-          .font-raleway { font-family: 'Raleway', sans-serif; }
-
-          @media print {
-            /* Fix for content cutoff - reset app-level overflows */
-            html, body, #root, main {
-              height: auto !important;
-              overflow: visible !important;
-              background: white !important;
-              position: static !important;
-            }
-
-            /* Hide everything by default */
-            body * { visibility: hidden; }
-
-            /* Only show the print area and its children */
-            .print-area, .print-area * { visibility: visible; }
-            
-            /* Position the print area at top-left */
-            .print-area { 
-              position: absolute; 
-              left: 0; 
-              top: 0; 
-              width: 100%; 
-              margin: 0; 
-              padding: 0;
-              z-index: 9999;
-            }
-
-            .page-break { page-break-before: always; }
-            .no-print { display: none !important; }
-            
-            @page {
-              margin: 2cm;
-              size: A4;
-              @bottom-center {
-                content: "${ebookData.title} | " counter(page);
-                font-size: 9pt;
-                color: #9ca3af;
-              }
-            }
-          }
-        `}
-      </style>
-
-      <div className="max-w-5xl mx-auto">
-        <div className="text-center mb-8 no-print">
-          <h1 className="text-3xl font-extrabold text-gray-900 mb-2">Gotowy Produkt</h1>
-          <p className="text-gray-600">Pobierz pełną treść e-booka lub materiały promocyjne.</p>
+    <div className="flex flex-col h-full bg-gray-50 overflow-hidden relative">
+      <div className="bg-white border-b border-gray-200 px-4 md:px-8 py-3 flex flex-col md:flex-row justify-between items-center shadow-sm z-10 gap-4 md:gap-0">
+        <div className="flex items-center space-x-2 text-sm text-gray-500 overflow-x-auto w-full md:w-auto pb-2 md:pb-0">
+          <button onClick={() => onChangePhase(AppPhase.BRIEFING)} className="hover:text-blue-600 whitespace-nowrap">Briefing</button>
+          <span>/</span>
+          <button onClick={() => onChangePhase(AppPhase.STRUCTURE)} className="hover:text-blue-600 whitespace-nowrap">Struktura</button>
+          <span>/</span>
+          <button onClick={() => onChangePhase(AppPhase.WRITING)} className="hover:text-blue-600 whitespace-nowrap">Treść</button>
+          <span>/</span>
+          <span className="font-bold text-gray-900 whitespace-nowrap">Gotowy Produkt</span>
         </div>
-
-        {/* Tab Switcher */}
-        <div className="flex justify-center mb-8 no-print">
-          <div className="bg-white p-1 rounded-xl shadow-sm border border-gray-200 inline-flex">
-            <button
-              onClick={() => setActiveTab('marketing')}
-              className={`px-6 py-2 rounded-lg text-sm font-medium transition-all flex items-center ${
-                activeTab === 'marketing' 
-                  ? 'bg-indigo-600 text-white shadow-md' 
-                  : 'text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              <Sparkles className="w-4 h-4 mr-2" />
-              Marketing & Prompty
-            </button>
-            <button
-              onClick={() => setActiveTab('ebook')}
-              className={`px-6 py-2 rounded-lg text-sm font-medium transition-all flex items-center ${
-                activeTab === 'ebook' 
-                  ? 'bg-blue-600 text-white shadow-md' 
-                  : 'text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              <BookText className="w-4 h-4 mr-2" />
-              Pełny E-book
-            </button>
-          </div>
+        
+        <div className="flex bg-gray-100 p-1 rounded-lg w-full md:w-auto overflow-x-auto">
+          <button onClick={() => setActiveTab('marketing')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'marketing' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-900'}`}>Marketing</button>
+          <button onClick={() => setActiveTab('ebook')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'ebook' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-900'}`}>E-book</button>
+          <button onClick={() => setActiveTab('training')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center justify-center ${activeTab === 'training' ? 'bg-white shadow text-orange-600' : 'text-gray-500 hover:text-gray-900'}`}><GraduationCap className="w-4 h-4 mr-1" /> Szkolenie</button>
+          <button onClick={() => setActiveTab('audio')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center justify-center ${activeTab === 'audio' ? 'bg-white shadow text-purple-600' : 'text-gray-500 hover:text-gray-900'}`}><Headphones className="w-4 h-4 mr-1" /> Audio</button>
         </div>
+      </div>
 
-        {/* --- MARKETING TAB --- */}
-        {activeTab === 'marketing' && (
-          <div className="space-y-6">
-            {isGenerating && !ebookData.extras ? (
-              <div className="flex flex-col items-center justify-center py-20">
-                <Loader2 className="w-12 h-12 text-indigo-600 animate-spin mb-4" />
-                <p className="text-lg font-medium text-gray-700">Analizuję treść e-booka i tworzę materiały sprzedażowe...</p>
-              </div>
-            ) : ebookData.extras ? (
-              <>
-                {/* Social Share */}
-                <div className="bg-white p-6 rounded-xl shadow-sm border border-indigo-100 flex flex-col md:flex-row items-center justify-between">
-                  <div className="mb-4 md:mb-0">
-                    <h3 className="text-lg font-bold text-gray-900">Udostępnij projekt</h3>
-                    <p className="text-sm text-gray-500">Pochwal się postępami w social mediach</p>
-                  </div>
-                  <div className="flex gap-2 flex-wrap">
-                    <button onClick={() => handleShareSocial('facebook')} className="p-2 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors" title="Udostępnij na Facebooku">
-                      <Facebook className="w-5 h-5" />
-                    </button>
-                    <button onClick={() => handleShareSocial('twitter')} className="p-2 bg-sky-500 text-white rounded-full hover:bg-sky-600 transition-colors" title="Udostępnij na X (Twitter)">
-                      <Twitter className="w-5 h-5" />
-                    </button>
-                    <button onClick={() => handleShareSocial('linkedin')} className="p-2 bg-blue-800 text-white rounded-full hover:bg-blue-900 transition-colors" title="Udostępnij na LinkedIn">
-                      <Linkedin className="w-5 h-5" />
-                    </button>
-                    <button onClick={() => handleShareSocial('pinterest')} className="p-2 bg-red-600 text-white rounded-full hover:bg-red-700 transition-colors" title="Zapisz na Pinterest">
-                      <Share2 className="w-5 h-5" />
-                    </button>
-                    <button onClick={() => handleShareSocial('email')} className="p-2 bg-gray-600 text-white rounded-full hover:bg-gray-700 transition-colors" title="Wyślij e-mail">
-                      <Mail className="w-5 h-5" />
-                    </button>
-                    <div className="w-px h-8 bg-gray-200 mx-2"></div>
-                    <button onClick={handleShareFile} className="p-2 bg-green-600 text-white rounded-full hover:bg-green-700 transition-colors" title="Udostępnij plik (Mobile)">
-                       <Share className="w-5 h-5" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Description & Blurb */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                    <h3 className="text-sm font-bold uppercase text-gray-400 mb-2">Short Description (SEO)</h3>
-                    <p className="text-gray-800 italic">{ebookData.extras.shortDescription}</p>
-                    <button onClick={() => handleCopy(ebookData.extras!.shortDescription)} className="mt-3 text-xs text-indigo-600 font-semibold flex items-center"><Copy className="w-3 h-3 mr-1"/> {copied ? 'Skopiowano!' : 'Kopiuj'}</button>
-                  </div>
-                  <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                     <h3 className="text-sm font-bold uppercase text-gray-400 mb-2">Alternatywne Tytuły</h3>
-                     <ul className="list-disc list-inside space-y-1 text-gray-700">
-                        {ebookData.extras.alternativeTitles.map((t, i) => <li key={i}>{t}</li>)}
-                     </ul>
-                  </div>
-                </div>
-
-                 {/* Sales Blurb */}
-                 <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200">
-                    <h3 className="text-lg font-bold text-gray-900 mb-4 border-b pb-2">Tekst Sprzedażowy (Landing Page)</h3>
-                    <div className="prose prose-indigo max-w-none">
-                      <ReactMarkdown>{ebookData.extras.marketingBlurb}</ReactMarkdown>
-                    </div>
+      <div className="flex-1 overflow-y-auto p-4 lg:p-8">
+        <div className="max-w-6xl mx-auto">
+             {!ebookData.extras && !isGenerating ? (
+                 <div className="text-center py-20">
+                     <Sparkles className="w-16 h-16 text-gray-300 mx-auto mb-6" />
+                     <h2 className="text-2xl font-bold text-gray-900 mb-4">Materiały dodatkowe nie zostały jeszcze wygenerowane.</h2>
+                     <button onClick={onGenerateExtras} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-full shadow-lg transition-transform hover:scale-105">
+                         Generuj Pakiet Marketingowy
+                     </button>
                  </div>
-
-                 {/* Image Prompts */}
-                 <div className="bg-gradient-to-br from-gray-900 to-slate-800 text-white p-8 rounded-xl shadow-lg">
-                    <div className="flex items-center mb-6">
-                      <ImageIcon className="w-6 h-6 mr-3 text-purple-400" />
-                      <h3 className="text-xl font-bold">Prompty dla AI Graphic Generator</h3>
-                    </div>
-                    <div className="grid grid-cols-1 gap-6">
-                      <div>
-                        <h3 className="text-xl font-bold text-white mb-2">E-book Cover Options</h3>
-                        <span className="text-xs font-bold text-purple-300 uppercase">Okładka (Cover)</span>
-                        <div className="bg-white/10 p-3 rounded mt-1 font-mono text-xs text-gray-300 select-all">
-                          {ebookData.extras.imagePrompts.cover}
-                        </div>
-                      </div>
-                      <div>
-                        <span className="text-xs font-bold text-purple-300 uppercase">Wizualizacja 3D (Box)</span>
-                        <div className="bg-white/10 p-3 rounded mt-1 font-mono text-xs text-gray-300 select-all">
-                          {ebookData.extras.imagePrompts.box3d}
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                           <span className="text-xs font-bold text-purple-300 uppercase">Tło Spisu Treści</span>
-                           <div className="bg-white/10 p-3 rounded mt-1 font-mono text-xs text-gray-300 select-all">
-                            {ebookData.extras.imagePrompts.tocBackground}
-                           </div>
-                        </div>
-                        <div>
-                           <span className="text-xs font-bold text-purple-300 uppercase">Tło Stron</span>
-                           <div className="bg-white/10 p-3 rounded mt-1 font-mono text-xs text-gray-300 select-all">
-                            {ebookData.extras.imagePrompts.pageBackground}
-                           </div>
-                        </div>
-                      </div>
-                    </div>
-                 </div>
-              </>
-            ) : null}
-          </div>
-        )}
-
-        {/* --- EBOOK FULL VIEW --- */}
-        {activeTab === 'ebook' && (
-          <div>
-            {/* Toolbar */}
-            <div className="flex flex-wrap items-center justify-between mb-6 bg-white p-4 rounded-xl border border-gray-200 shadow-sm no-print sticky top-0 z-20">
-              <div className="flex items-center gap-4">
-                 <div className="flex items-center gap-2 border-r pr-4">
-                    <Type className="w-4 h-4 text-gray-500" />
-                    <select 
-                      value={font} 
-                      onChange={(e) => setFont(e.target.value as FontType)}
-                      className="text-sm border-none bg-transparent focus:ring-0 font-medium text-gray-700 cursor-pointer w-48"
-                    >
-                      {Object.entries(fontConfig).map(([key, config]) => (
-                        <option key={key} value={key}>{config.label}</option>
-                      ))}
-                    </select>
-                 </div>
-              </div>
-              <div className="flex gap-2">
-                <button 
-                  onClick={handleExportWord}
-                  className="flex items-center px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg text-sm font-bold shadow-md shadow-blue-600/20 transition-all transform hover:-translate-y-0.5"
-                >
-                  <FileText className="w-4 h-4 mr-2" />
-                  Eksport Word (Pełny)
-                </button>
-                <button 
-                  onClick={() => window.print()}
-                  className="flex items-center px-4 py-2 bg-gray-900 text-white hover:bg-black rounded-lg text-sm font-semibold transition-colors"
-                >
-                  <Printer className="w-4 h-4 mr-2" />
-                  Drukuj / PDF
-                </button>
-              </div>
-            </div>
-
-            {/* Document Preview (Print Area) */}
-            <div className={`print-area bg-white shadow-2xl min-h-[1000px] p-[2cm] mx-auto text-gray-900 ${fontConfig[font]?.class} max-w-[21cm]`}>
-              
-              {/* Cover Page Placeholder */}
-              <div className="flex flex-col justify-center items-center text-center min-h-[800px] border-b-2 border-gray-100 mb-12 page-break">
-                <h1 className="text-5xl font-bold mb-6">{ebookData.title}</h1>
-                <p className="text-2xl text-gray-600 mb-12">{ebookData.briefing?.topic}</p>
-                <div className="mt-auto mb-12">
-                  <p className="text-xl font-medium">{author}</p>
-                  <p className="text-sm text-gray-400 mt-2">{currentYear}</p>
+             ) : isGenerating ? (
+                <div className="text-center py-20 animate-pulse">
+                  <Sparkles className="w-16 h-16 text-blue-500 animate-spin mx-auto mb-6" />
+                  <h2 className="text-2xl font-bold text-gray-900 mb-2">Generuję materiały...</h2>
+                  <p className="text-gray-500">To może potrwać do minuty. Tworzymy opisy, prompty i strategie.</p>
                 </div>
-              </div>
+             ) : (
+                <>
+                  {/* MARKETING TAB */}
+                  {activeTab === 'marketing' && (
+                      <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-500">
+                          {/* Teaser Section */}
+                          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                             <div className="flex justify-between items-center mb-6">
+                                 <h3 className="text-xl font-bold text-gray-900 flex items-center"><Layers className="w-6 h-6 mr-2 text-indigo-600" /> Lead Magnet (Teaser)</h3>
+                                 <div className="flex gap-2">
+                                     <button onClick={handleCopyTeaserText} className="flex items-center px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-bold"><Copy className="w-4 h-4 mr-2" /> Kopiuj Tekst</button>
+                                     <button onClick={handleExportTeaserPDF} className="flex items-center px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-bold"><FileDown className="w-4 h-4 mr-2" /> Pobierz PDF</button>
+                                 </div>
+                             </div>
+                             {/* Cover Preview */}
+                             <div className="flex justify-center p-4 bg-gray-50 rounded-xl border border-gray-100">
+                                <div className="w-48 h-64 bg-white shadow-lg flex items-center justify-center overflow-hidden">
+                                    {uploadedImages['cover'] ? <img src={uploadedImages['cover']} className="w-full h-full object-cover" /> : <span className="text-xs text-gray-400">Brak okładki</span>}
+                                </div>
+                             </div>
+                          </div>
+                          
+                          {/* Descriptions */}
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                              <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+                                  <div className="flex justify-between items-center mb-2">
+                                      <span className="text-xs font-bold text-gray-500 uppercase">Hook (100 zn)</span>
+                                      <Copy className="w-4 h-4 text-gray-400 cursor-pointer" onClick={() => handleCopy(ebookData.extras?.shortDescription || '')} />
+                                  </div>
+                                  <p className="text-sm italic text-gray-700">{ebookData.extras?.shortDescription}</p>
+                              </div>
+                              <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+                                  <div className="flex justify-between items-center mb-2">
+                                      <span className="text-xs font-bold text-gray-500 uppercase">Ads (200 zn)</span>
+                                      <Copy className="w-4 h-4 text-gray-400 cursor-pointer" onClick={() => handleCopy(ebookData.extras?.mediumDescription || '')} />
+                                  </div>
+                                  <p className="text-sm italic text-gray-700">{ebookData.extras?.mediumDescription}</p>
+                              </div>
+                              <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+                                  <div className="flex justify-between items-center mb-2">
+                                      <span className="text-xs font-bold text-gray-500 uppercase">Promo Post</span>
+                                      <Copy className="w-4 h-4 text-gray-400 cursor-pointer" onClick={() => handleCopy(ebookData.extras?.longDescription || '')} />
+                                  </div>
+                                  <p className="text-sm italic text-gray-700 line-clamp-4">{ebookData.extras?.longDescription}</p>
+                              </div>
+                          </div>
 
-              {/* Copyright Page */}
-              <div className="flex flex-col justify-end min-h-[600px] mb-12 page-break text-xs text-gray-500 leading-relaxed">
-                 <p>Copyright © {currentYear} {author}. Wszelkie prawa zastrzeżone.</p>
-                 <p className="mt-4">
-                   Żadna część tej publikacji nie może być powielana, przechowywana w systemie wyszukiwania ani przekazywana w jakiejkolwiek formie ani za pomocą jakichkolwiek środków elektronicznych, mechanicznych, fotokopii, nagrywania lub innych, bez uprzedniej pisemnej zgody wydawcy.
-                 </p>
-                 <p className="mt-4">
-                   Informacje zawarte w tym e-booku mają charakter wyłącznie edukacyjny i nie zastępują profesjonalnej porady.
-                 </p>
-              </div>
+                          {/* Graphics & Blurb */}
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                             {/* Blurb */}
+                             <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                                 <div className="flex justify-between items-start mb-4">
+                                     <h3 className="font-bold text-gray-900">Landing Page Copy</h3>
+                                     <Copy className="w-5 h-5 text-gray-400 cursor-pointer" onClick={() => handleCopy(ebookData.extras?.marketingBlurb || '')} />
+                                 </div>
+                                 <div className="prose prose-sm prose-blue max-w-none bg-gray-50 p-4 rounded-lg border border-gray-100 h-96 overflow-y-auto" dangerouslySetInnerHTML={{ __html: ebookData.extras?.marketingBlurb || '' }} />
+                             </div>
 
-              {/* TOC */}
-              <div className="mb-12 page-break">
-                <h2 className="text-3xl font-bold mb-8 text-center border-b pb-4">Spis Treści</h2>
-                <ul className="space-y-4">
-                  {ebookData.chapters.map((chapter, index) => (
-                    <li key={chapter.id} className="flex justify-between items-baseline border-b border-dotted border-gray-300 pb-1">
-                      <span className="text-lg">
-                        <span className="font-bold mr-2">{index + 1}.</span> {chapter.title}
-                      </span>
-                    </li>
-                  ))}
-                  {ebookData.extras?.checklist && (
-                    <li className="flex justify-between items-baseline border-b border-dotted border-gray-300 pb-1 mt-4">
-                      <span className="text-lg font-bold">
-                        Checklista - Action Plan
-                      </span>
-                    </li>
+                             {/* Graphics Generator */}
+                             <div className="bg-slate-900 p-6 rounded-xl shadow-lg text-white">
+                                <h3 className="font-bold mb-6 flex items-center"><Palette className="w-5 h-5 mr-2" /> Studio Graficzne AI</h3>
+                                <div className="space-y-4">
+                                    {/* Cover */}
+                                    <div>
+                                        <div className="flex justify-between mb-2">
+                                            <label className="text-xs font-bold text-blue-300 uppercase">Okładka</label>
+                                            <div className="flex gap-2">
+                                                <button onClick={() => handleGenerateImage('cover', ebookData.extras?.imagePrompts.cover || '')} className="text-xs bg-blue-600 px-2 py-1 rounded">Generuj</button>
+                                                <button onClick={() => handleGenerateCoverVariations(ebookData.extras?.imagePrompts.cover || '')} className="text-xs bg-indigo-600 px-2 py-1 rounded">Warianty</button>
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <ImageUploadBox label="Okładka" onUpload={(f: File) => handleImageUpload('cover', f)} currentImage={uploadedImages['cover']} compact />
+                                            {coverVariations.length > 0 && (
+                                                <div className="grid grid-cols-2 gap-1 bg-slate-800 p-1 rounded">
+                                                    {coverVariations.map((v, i) => <img key={i} src={v} className="w-full h-16 object-cover cursor-pointer hover:opacity-80" onClick={() => handleSelectVariation(v)} />)}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                    
+                                    {/* Page Background */}
+                                    <div>
+                                        <div className="flex justify-between mb-2">
+                                            <label className="text-xs font-bold text-blue-300 uppercase">Tło Stron (PDF)</label>
+                                            <button onClick={() => handleGenerateImage('pageBackground', ebookData.extras?.imagePrompts.pageBackground || '')} className="text-xs bg-blue-600 px-2 py-1 rounded">Generuj Jasne Tło</button>
+                                        </div>
+                                        <ImageUploadBox label="Tło Stron" onUpload={(f: File) => handleImageUpload('pageBackground', f)} currentImage={uploadedImages['pageBackground']} compact />
+                                    </div>
+
+                                    {/* 3D Box */}
+                                    <div>
+                                        <div className="flex justify-between mb-2">
+                                            <label className="text-xs font-bold text-blue-300 uppercase">Box 3D</label>
+                                            <button onClick={() => handleGenerateImage('box3d', ebookData.extras?.imagePrompts.box3d || '')} className="text-xs bg-blue-600 px-2 py-1 rounded">Generuj</button>
+                                        </div>
+                                        <ImageUploadBox label="Box 3D" onUpload={(f: File) => handleImageUpload('box3d', f)} currentImage={uploadedImages['box3d']} compact />
+                                    </div>
+                                </div>
+                             </div>
+                          </div>
+                      </div>
                   )}
-                </ul>
-              </div>
 
-              {/* Chapters */}
-              <div className="space-y-16">
-                {ebookData.chapters.map((chapter, index) => (
-                  <div key={chapter.id} className="page-break">
-                     {/* Chapter Title Page/Header */}
-                     <div className="mb-8 mt-4 pt-4 border-t-4 border-gray-900">
-                        <span className="text-sm font-bold tracking-widest uppercase text-gray-500">Rozdział {index + 1}</span>
-                        <h2 className="text-4xl font-bold mt-2 mb-6">{chapter.title}</h2>
-                     </div>
+                  {/* EBOOK TAB */}
+                  {activeTab === 'ebook' && (
+                      <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-500">
+                          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 text-center py-12">
+                              <BookOpen className="w-16 h-16 text-blue-500 mx-auto mb-4" />
+                              <h2 className="text-3xl font-bold text-gray-900 mb-2">Pełna Wersja E-booka</h2>
+                              <p className="text-gray-600 mb-8 max-w-md mx-auto">Twój produkt jest gotowy do publikacji. Upewnij się, że dodałeś okładkę i wygenerowałeś obrazki do rozdziałów w sekcji Marketing.</p>
+                              
+                              <button onClick={handleExportPDF} className="bg-green-600 hover:bg-green-700 text-white font-bold py-4 px-10 rounded-full shadow-xl transition-all flex items-center mx-auto text-lg">
+                                  <Download className="w-6 h-6 mr-3" />
+                                  Pobierz Pełny PDF
+                              </button>
+                          </div>
+                      </div>
+                  )}
 
-                     <div className="prose prose-lg max-w-none text-justify prose-headings:font-bold prose-h2:text-2xl prose-h2:mt-8 prose-h3:text-xl">
-                        <ReactMarkdown 
-                          components={{
-                            h1: ({node, ...props}) => <h2 {...props} style={{fontSize: '1.8rem', marginTop: '2rem'}} />, 
-                            table: ({node, ...props}) => <div className="overflow-x-auto my-6"><table {...props} className="min-w-full divide-y divide-gray-300 border" /></div>,
-                            thead: ({node, ...props}) => <thead {...props} className="bg-gray-50" />,
-                            th: ({node, ...props}) => <th {...props} className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900" />,
-                            td: ({node, ...props}) => <td {...props} className="whitespace-nowrap px-3 py-4 text-sm text-gray-500 border-t" />,
-                            a: ({node, ...props}) => <a {...props} className="text-blue-600 hover:text-blue-800 underline" target="_blank" />
-                          }}
-                        >
-                          {chapter.content || "*Brak treści*"}
-                        </ReactMarkdown>
-                     </div>
-                     
-                     {/* Footer for Preview Only */}
-                     <div className="mt-8 pt-4 border-t border-gray-100 flex justify-between text-xs text-gray-400 no-print">
-                       <span>{ebookData.title}</span>
-                       <span>{author}</span>
-                     </div>
-                  </div>
-                ))}
-              </div>
-              
-              {/* Checklist Section */}
-              {ebookData.extras?.checklist && (
-                <div className="page-break">
-                   <div className="mb-8 mt-4 pt-4 border-t-4 border-gray-900">
-                      <span className="text-sm font-bold tracking-widest uppercase text-gray-500">Dodatek</span>
-                      <h2 className="text-4xl font-bold mt-2 mb-6">Checklista Podsumowująca</h2>
-                   </div>
-                   <div className="prose prose-lg max-w-none">
-                      <ReactMarkdown>
-                        {ebookData.extras.checklist}
-                      </ReactMarkdown>
-                   </div>
-                </div>
-              )}
+                  {/* TRAINING TAB */}
+                  {activeTab === 'training' && (
+                      <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-500">
+                          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                              <div className="flex justify-between items-center mb-6 border-b pb-4">
+                                  <div>
+                                      <h2 className="text-2xl font-bold text-gray-900">Kurs / Szkolenie</h2>
+                                      <p className="text-gray-500 text-sm">Automatycznie wygenerowany sylabus i materiały szkoleniowe na podstawie e-booka.</p>
+                                  </div>
+                                  <button 
+                                    onClick={handleGenerateTraining} 
+                                    disabled={isGeneratingCourse}
+                                    className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-2 rounded-lg font-bold flex items-center disabled:opacity-50"
+                                  >
+                                      {isGeneratingCourse ? <RefreshCw className="w-4 h-4 animate-spin mr-2" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                                      {ebookData.extras?.trainingCourse ? 'Generuj Ponownie' : 'Generuj Kurs'}
+                                  </button>
+                              </div>
 
-              {/* Back Cover / Long Description */}
-              {ebookData.extras?.longDescription && (
-                <div className="page-break flex flex-col justify-center items-center min-h-[800px] bg-gray-50 p-12 mt-12 rounded-xl print:bg-white border-t-8 border-gray-900">
-                   <h3 className="text-2xl font-bold mb-6">O tym E-booku</h3>
-                   <p className="text-lg leading-relaxed text-center italic">{ebookData.extras.longDescription}</p>
-                   <div className="mt-12 pt-8 border-t border-gray-300 w-full text-center">
-                      <p className="font-bold">{author}</p>
-                      <p className="text-sm text-gray-500">Ekspert w dziedzinie: {ebookData.briefing?.topic}</p>
-                   </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+                              {ebookData.extras?.trainingCourse ? (
+                                  <div className="space-y-6">
+                                      <div className="bg-orange-50 p-6 rounded-xl border border-orange-100">
+                                          <h3 className="text-xl font-bold text-orange-900 mb-2">{ebookData.extras.trainingCourse.title}</h3>
+                                          <p className="text-orange-800 mb-4">{ebookData.extras.trainingCourse.description}</p>
+                                          <div className="flex gap-4 text-sm font-semibold text-orange-700">
+                                              <span>⏱ {ebookData.extras.trainingCourse.totalDuration}</span>
+                                              <span>👥 {ebookData.extras.trainingCourse.targetAudience}</span>
+                                          </div>
+                                      </div>
+                                      
+                                      <div className="space-y-4">
+                                          {ebookData.extras.trainingCourse.modules.map((mod, i) => (
+                                              <div key={i} className="border border-gray-200 rounded-lg p-4">
+                                                  <h4 className="font-bold text-lg mb-2 text-gray-800">Moduł {i+1}: {mod.title}</h4>
+                                                  <p className="text-sm text-gray-600 mb-3 bg-gray-50 p-2 rounded">Cel: {mod.objective}</p>
+                                                  <ul className="list-disc list-inside space-y-1 text-sm text-gray-700 ml-2">
+                                                      {mod.lessons.map((l, j) => (
+                                                          <li key={j}><span className="font-semibold">{l.title}</span> ({l.duration}) - <span className="italic text-gray-500">{l.activity}</span></li>
+                                                      ))}
+                                                  </ul>
+                                              </div>
+                                          ))}
+                                      </div>
+                                  </div>
+                              ) : (
+                                  <div className="text-center py-12 text-gray-400">
+                                      <GraduationCap className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                                      <p>Kliknij "Generuj Kurs", aby stworzyć program szkoleniowy.</p>
+                                  </div>
+                              )}
+                          </div>
+                      </div>
+                  )}
+
+                  {/* AUDIO TAB */}
+                  {activeTab === 'audio' && (
+                      <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-500">
+                           <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                               <div className="flex justify-between items-center mb-6">
+                                   <h2 className="text-2xl font-bold text-gray-900">Audiobook AI</h2>
+                                   <div className="flex items-center gap-2">
+                                       <select 
+                                         value={selectedVoice} 
+                                         onChange={(e) => setSelectedVoice(e.target.value)}
+                                         className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                       >
+                                           <option value="Kore">Kore (Kobieta)</option>
+                                           <option value="Fenrir">Fenrir (Mężczyzna)</option>
+                                           <option value="Puck">Puck (Kobieta)</option>
+                                       </select>
+                                       <button 
+                                         onClick={handleGenerateAudio} 
+                                         disabled={isGeneratingAudio}
+                                         className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg font-bold flex items-center disabled:opacity-50"
+                                       >
+                                           {isGeneratingAudio ? <RefreshCw className="w-4 h-4 animate-spin mr-2" /> : <Headphones className="w-4 h-4 mr-2" />}
+                                           Generuj Audio
+                                       </button>
+                                   </div>
+                               </div>
+
+                               {audioUrl ? (
+                                   <div className="bg-purple-50 p-6 rounded-xl border border-purple-100 text-center">
+                                       <div className="w-20 h-20 bg-purple-200 rounded-full flex items-center justify-center mx-auto mb-4 text-purple-700">
+                                           <Headphones className="w-10 h-10" />
+                                       </div>
+                                       <h3 className="text-lg font-bold text-purple-900 mb-2">{ebookData.title} - Audiobook</h3>
+                                       <audio ref={audioRef} src={audioUrl} controls className="w-full mt-4" />
+                                       <a href={audioUrl} download={`audiobook-${ebookData.title}.wav`} className="inline-block mt-4 text-sm font-bold text-purple-600 hover:underline">
+                                           Pobierz plik .WAV
+                                       </a>
+                                   </div>
+                               ) : (
+                                   <div className="text-center py-12 text-gray-400">
+                                       <Headphones className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                                       <p>Wygeneruj wersję audio swojego e-booka.</p>
+                                   </div>
+                               )}
+                           </div>
+                      </div>
+                  )}
+                </>
+             )}
+        </div>
       </div>
     </div>
   );
