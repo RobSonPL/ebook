@@ -1,4 +1,3 @@
-
 import React, { useState, useRef } from 'react';
 import { Plus, Book, Clock, Sparkles, ArrowRight, Trash2, Edit, TrendingUp, Lightbulb, Upload, FileUp } from 'lucide-react';
 import { EbookData, NicheIdea, BriefingData, Chapter } from '../types';
@@ -386,6 +385,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         </div>
                         <button
                           onClick={() => onStartFromIdea({
+                            ...INITIAL_BRIEFING,
                             topic: idea.topic,
                             targetAudience: idea.audience,
                             coreProblem: idea.problem,
@@ -456,6 +456,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <div className="mt-2 md:mt-0 flex-shrink-0">
                       <button
                         onClick={() => onStartFromIdea({
+                          ...INITIAL_BRIEFING,
                           topic: idea.topic,
                           targetAudience: idea.audience,
                           coreProblem: idea.problem,

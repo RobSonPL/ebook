@@ -64,6 +64,8 @@ export const PhaseExtras: React.FC<PhaseExtrasProps> = ({
 
   const [isGeneratingCourse, setIsGeneratingCourse] = useState(false);
 
+  const purchaseLink = ebookData.extras?.purchaseLink || 'https://www.naffy.io/Synapse_Creative';
+
   // Load existing data
   useEffect(() => {
      if (ebookData.extras?.qrCodeUrl) setQrCodeUrl(ebookData.extras.qrCodeUrl);
@@ -142,8 +144,7 @@ export const PhaseExtras: React.FC<PhaseExtrasProps> = ({
   const createPdfDocDefinition = (isTeaser: boolean) => {
       const author = ebookData.briefing?.authorName || "Synapse Creative";
       const currentYear = new Date().getFullYear();
-      const purchaseLink = ebookData.extras?.purchaseLink || 'https://www.naffy.io/Synapse_Creative';
-
+      
       const docContent: any[] = [];
       
       // Cover Page
@@ -323,6 +324,15 @@ export const PhaseExtras: React.FC<PhaseExtrasProps> = ({
       </div>
   );
 
+  const marketingBlurbWithCta = ebookData.extras?.marketingBlurb 
+    ? ebookData.extras.marketingBlurb + `
+      <div style="text-align: center; margin-top: 30px; margin-bottom: 20px;">
+        <a href="${purchaseLink}" style="background-color: #2563eb; color: white; padding: 16px 32px; text-decoration: none; border-radius: 50px; font-weight: bold; font-size: 18px; display: inline-block; box-shadow: 0 10px 15px -3px rgba(37, 99, 235, 0.3);">
+          KUP TERAZ 🚀
+        </a>
+      </div>`
+    : '';
+
   return (
     <div className="flex flex-col h-full bg-gray-50 overflow-hidden relative">
       <div className="bg-white border-b border-gray-200 px-4 md:px-8 py-3 flex flex-col md:flex-row justify-between items-center shadow-sm z-10 gap-4 md:gap-0">
@@ -413,9 +423,9 @@ export const PhaseExtras: React.FC<PhaseExtrasProps> = ({
                              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
                                  <div className="flex justify-between items-start mb-4">
                                      <h3 className="font-bold text-gray-900">Landing Page Copy</h3>
-                                     <Copy className="w-5 h-5 text-gray-400 cursor-pointer" onClick={() => handleCopy(ebookData.extras?.marketingBlurb || '')} />
+                                     <Copy className="w-5 h-5 text-gray-400 cursor-pointer" onClick={() => handleCopy(marketingBlurbWithCta)} />
                                  </div>
-                                 <div className="prose prose-sm prose-blue max-w-none bg-gray-50 p-4 rounded-lg border border-gray-100 h-96 overflow-y-auto" dangerouslySetInnerHTML={{ __html: ebookData.extras?.marketingBlurb || '' }} />
+                                 <div className="prose prose-sm prose-blue max-w-none bg-gray-50 p-4 rounded-lg border border-gray-100 h-96 overflow-y-auto" dangerouslySetInnerHTML={{ __html: marketingBlurbWithCta }} />
                              </div>
 
                              {/* Graphics Generator */}

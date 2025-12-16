@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Layout } from './components/Layout';
 import { Dashboard } from './components/Dashboard';
@@ -288,7 +287,8 @@ const App: React.FC = () => {
     }));
   };
 
-  const handleGenerateChapter = async (chapterId: string, instructions?: string, length?: 'short' | 'medium' | 'long') => {
+  // Fixed signature to accept 'very_long'
+  const handleGenerateChapter = async (chapterId: string, instructions?: string, length?: 'short' | 'medium' | 'long' | 'very_long') => {
     const chapter = ebookData.chapters.find(c => c.id === chapterId);
     if (!chapter) return;
 

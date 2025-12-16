@@ -1,10 +1,12 @@
-
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { SYSTEM_INSTRUCTION } from '../constants';
 import { BriefingData, TocResponse, NicheIdea, ExtrasData, Chapter, TrainingCourse } from '../types';
 
+// Safe access to process
+declare const process: any;
+
 const getClient = () => {
-  const apiKey = process.env.API_KEY;
+  const apiKey = (typeof process !== 'undefined' ? process.env?.API_KEY : '') || '';
   if (!apiKey) {
     throw new Error("Brak klucza API. Upewnij się, że environment variable API_KEY jest ustawione.");
   }
@@ -774,7 +776,8 @@ export const generateImageVariations = async (prompt: string, count: number = 4)
 
 export const generateVideo = async (prompt: string): Promise<string> => {
   const ai = getClient();
-  
+  const apiKey = (typeof process !== 'undefined' ? process.env?.API_KEY : '') || '';
+
   let operation = await ai.models.generateVideos({
     model: 'veo-3.1-fast-generate-preview',
     prompt: prompt,
@@ -790,10 +793,11 @@ export const generateVideo = async (prompt: string): Promise<string> => {
     operation = await ai.operations.getVideosOperation({ operation: operation });
   }
 
+  // Ensure type safety - cast or check if uri exists
   const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
   
   if (videoUri) {
-    return `${videoUri}&key=${process.env.API_KEY}`;
+    return `${videoUri}&key=${apiKey}`;
   }
 
   throw new Error("Failed to generate video.");
