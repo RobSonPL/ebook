@@ -2,15 +2,13 @@ import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { SYSTEM_INSTRUCTION } from '../constants';
 import { BriefingData, TocResponse, NicheIdea, ExtrasData, Chapter, TrainingCourse } from '../types';
 
-// Safe access to process
+// Declare process to avoid 'Cannot find name' error if @types/node is missing
 declare const process: any;
 
 const getClient = () => {
-  const apiKey = (typeof process !== 'undefined' ? process.env?.API_KEY : '') || '';
-  if (!apiKey) {
-    throw new Error("Brak klucza API. Upewnij się, że environment variable API_KEY jest ustawione.");
-  }
-  return new GoogleGenAI({ apiKey });
+  // API Key must be obtained exclusively from process.env.API_KEY as per guidelines.
+  // It is assumed to be defined via Vite config or environment.
+  return new GoogleGenAI({ apiKey: process.env.API_KEY });
 };
 
 // Helper to strip markdown code blocks from JSON response
@@ -747,9 +745,11 @@ export const generateImage = async (prompt: string): Promise<string> => {
   });
 
   for (const part of response.candidates?.[0]?.content?.parts || []) {
-    if (part.inlineData) {
+    // Check if inlineData exists and has data before assigning to string
+    if (part.inlineData && part.inlineData.data) {
       const base64EncodeString: string = part.inlineData.data;
-      return `data:${part.inlineData.mimeType};base64,${base64EncodeString}`;
+      const mimeType = part.inlineData.mimeType || 'image/png';
+      return `data:${mimeType};base64,${base64EncodeString}`;
     }
   }
   
@@ -776,7 +776,8 @@ export const generateImageVariations = async (prompt: string, count: number = 4)
 
 export const generateVideo = async (prompt: string): Promise<string> => {
   const ai = getClient();
-  const apiKey = (typeof process !== 'undefined' ? process.env?.API_KEY : '') || '';
+  // Safe access to API Key for download link appending
+  const apiKey = process.env.API_KEY;
 
   let operation = await ai.models.generateVideos({
     model: 'veo-3.1-fast-generate-preview',
