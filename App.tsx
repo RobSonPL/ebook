@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import { Layout } from './components/Layout';
 import { Dashboard } from './components/Dashboard';
 import { PhaseBriefing } from './components/PhaseBriefing';
@@ -440,6 +441,7 @@ const App: React.FC = () => {
           onUpdateExtras={handleUpdateExtras}
         />
       )}
+      <Analytics />
     </Layout>
   );
 };
