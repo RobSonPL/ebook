@@ -1,13 +1,20 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  BookOpen, Sparkles, Layers, FileDown, Copy, Megaphone, 
-  Palette, GraduationCap, Headphones, ArrowRight, Download, 
-  RefreshCw, Upload as UploadIcon
+  FileDown, Megaphone, Palette, GraduationCap, Headphones, ArrowRight, 
+  RefreshCw, FileText, ImageIcon, Volume2, Play, Zap, Wrench, 
+  ClipboardCheck, FileArchive, Globe, Check, User, Layout, DownloadCloud,
+  Sparkles, Download, Image as LucideImage, Eye, ChevronRight, ChevronLeft,
+  Loader2, Upload, Trash2, X, Info
 } from 'lucide-react';
-import { EbookData, ExtrasData, AppPhase, TrainingCourse } from '../types';
-import { generateImage, generateImageVariations, generateAudiobook, generateCourse } from '../services/geminiService';
+import { EbookData, ExtrasData, AppPhase } from '../types';
+import { generateImage, generateAudiobook, generateCourse } from '../services/geminiService';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
-declare var pdfMake: any;
+declare var html2pdf: any;
+declare var htmlDocx: any;
+declare var JSZip: any;
 
 interface PhaseExtrasProps {
   ebookData: EbookData;
@@ -17,29 +24,12 @@ interface PhaseExtrasProps {
   onUpdateExtras: (updates: Partial<ExtrasData>) => void;
 }
 
-// Helpers
-const processTextForPdf = (text: string, style: string) => {
-    return text.replace(/[*_#`]/g, '');
-};
-
-const parseMarkdownTableToPdfMake = (markdownTable: string) => {
-    const rows = markdownTable.trim().split('\n');
-    const body = rows.map(row => {
-        return row.split('|').filter(cell => cell.trim() !== '').map(cell => ({ text: cell.trim(), style: 'tableCell' }));
-    });
-    // Remove separator row if exists (usually starts with |-)
-    const cleanBody = body.filter(row => !row[0]?.text.match(/^[:\-]*/));
-
-    return {
-        table: {
-            headerRows: 1,
-            widths: Array(cleanBody[0]?.length || 1).fill('*'),
-            body: cleanBody
-        },
-        layout: 'lightHorizontalLines',
-        margin: [0, 10, 0, 10]
-    };
-};
+const AVAILABLE_VOICES = [
+  { id: 'Kore', name: 'Kore (Męski, Głęboki)' },
+  { id: 'Puck', name: 'Puck (Żeński, Jasny)' },
+  { id: 'Charon', name: 'Charon (Męski, Narracyjny)' },
+  { id: 'Zephyr', name: 'Zephyr (Żeński, Ciepły)' },
+];
 
 export const PhaseExtras: React.FC<PhaseExtrasProps> = ({ 
   ebookData, 
@@ -48,551 +38,390 @@ export const PhaseExtras: React.FC<PhaseExtrasProps> = ({
   onChangePhase, 
   onUpdateExtras 
 }) => {
-  const [activeTab, setActiveTab] = useState<'marketing' | 'ebook' | 'training' | 'audio'>('marketing');
-  
-  // Local state for generated assets
-  const [uploadedImages, setUploadedImages] = useState<Record<string, string>>({});
-  const [coverVariations, setCoverVariations] = useState<string[]>([]);
-  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
-  
-  const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
-  
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'marketing' | 'ebook' | 'training' | 'audio' | 'tools'>('marketing');
+  const [isGeneratingImg, setIsGeneratingImg] = useState<string | null>(null);
   const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
-  const [selectedVoice, setSelectedVoice] = useState('Kore');
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
+  const [audioProgress, setAudioProgress] = useState<{current: number, total: number} | null>(null);
   const [isGeneratingCourse, setIsGeneratingCourse] = useState(false);
-
-  const purchaseLink = ebookData.extras?.purchaseLink || 'https://www.naffy.io/Synapse_Creative';
-
-  // Load existing data
-  useEffect(() => {
-     if (ebookData.extras?.qrCodeUrl) setQrCodeUrl(ebookData.extras.qrCodeUrl);
-     if (ebookData.extras?.audiobookUrl) setAudioUrl(ebookData.extras.audiobookUrl);
-  }, [ebookData.extras]);
-
-  // Handlers
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    alert("Skopiowano do schowka!");
-  };
-
-  const handleCopyTeaserText = () => {
-      const text = ebookData.chapters.slice(0, 2).map(c => `## ${c.title}\n\n${c.content}`).join('\n\n');
-      handleCopy(text);
-  };
-
-  const handleGenerateImage = async (key: string, prompt: string) => {
-      // Fallback prompt for backgrounds if not provided
-      if (!prompt && (key === 'pageBackground' || key === 'tocBackground')) {
-          prompt = "Abstract subtle light texture, minimalist background";
-      }
-
-      if (!prompt) {
-          alert("Brak promptu. Wygeneruj najpierw pakiet marketingowy.");
-          return;
-      }
-      setIsGeneratingImage(true);
-      
-      let finalPrompt = prompt;
-      // ENFORCE: Light background, no text for page backgrounds
-      if (key === 'pageBackground' || key === 'tocBackground') {
-          finalPrompt += " . High brightness, white background, very light opacity, subtle abstract texture, NO TEXT, NO LETTERS, clean minimalist style, watermark-free, paper texture.";
-      }
-
-      try {
-          const img = await generateImage(finalPrompt);
-          setUploadedImages(prev => ({ ...prev, [key]: img }));
-      } catch (e) {
-          console.error(e);
-          alert("Błąd generowania obrazu.");
-      } finally {
-          setIsGeneratingImage(false);
-      }
-  };
-
-  const handleGenerateCoverVariations = async (prompt: string) => {
-      if (!prompt) return;
-      setIsGeneratingImage(true);
-      try {
-          const imgs = await generateImageVariations(prompt, 4);
-          setCoverVariations(imgs);
-      } catch (e) {
-          console.error(e);
-          alert("Błąd generowania wariantów.");
-      } finally {
-          setIsGeneratingImage(false);
-      }
-  };
-
-  const handleSelectVariation = (img: string) => {
-      setUploadedImages(prev => ({ ...prev, 'cover': img }));
-  };
-
-  const handleImageUpload = (key: string, file: File) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-          if (e.target?.result) {
-              setUploadedImages(prev => ({ ...prev, [key]: e.target!.result as string }));
-          }
-      };
-      reader.readAsDataURL(file);
-  };
+  const [audioChapters, setAudioChapters] = useState<Record<string, string>>({});
+  const [selectedVoice, setSelectedVoice] = useState('Kore');
+  const [isExporting, setIsExporting] = useState(false);
+  const [isZipping, setIsZipping] = useState(false);
   
-  // PDF Logic
-  const createPdfDocDefinition = (isTeaser: boolean) => {
-      const author = ebookData.briefing?.authorName || "Synapse Creative";
-      const currentYear = new Date().getFullYear();
+  const exportRef = useRef<HTMLDivElement>(null);
+  const salesCopyRef = useRef<HTMLDivElement>(null);
+  const toolsExportRef = useRef<HTMLDivElement>(null);
+  const trainingExportRef = useRef<HTMLDivElement>(null);
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 500);
+  };
+
+  const handleExportPDF = async (targetRef: React.RefObject<HTMLDivElement | null>, filename: string) => {
+    const element = targetRef.current;
+    if (!element || typeof html2pdf === 'undefined') return;
+    setIsExporting(true);
+    const opt = {
+      margin: 0,
+      filename: `${filename}.pdf`,
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, letterRendering: true },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      pagebreak: { mode: ['css', 'legacy'], before: '.page-break-before', avoid: 'img' }
+    };
+    try { await html2pdf().from(element).set(opt).save(); } catch (err) { alert("Błąd PDF."); } finally { setIsExporting(false); }
+  };
+
+  const handleExportDOCX = (targetRef: React.RefObject<HTMLDivElement | null>, filename: string, includeHooks: boolean = false) => {
+    if (!targetRef || !targetRef.current || typeof htmlDocx === 'undefined') return;
+    
+    let html = targetRef.current.innerHTML;
+    
+    if (includeHooks && ebookData.extras) {
+      const hooksHtml = `
+        <div style="background-color: #f8fafc; padding: 25px; border: 2px solid #e2e8f0; border-radius: 15px; margin-bottom: 40px; font-family: Arial, sans-serif;">
+          <h1 style="color: #2563eb; font-size: 24pt;">META-DANE E-BOOKA</h1>
+          <p><strong>Opis 100:</strong> ${ebookData.extras.shortDescription}</p>
+          <p><strong>Opis 200:</strong> ${ebookData.extras.longDescription}</p>
+          <hr/>
+          <p><strong>Hook 100:</strong> ${ebookData.extras.ctaHooks?.short100}</p>
+          <p><strong>Hook 200:</strong> ${ebookData.extras.ctaHooks?.medium200}</p>
+        </div>
+      `;
+      html = hooksHtml + html;
+    }
+
+    const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family: Arial, sans-serif; padding: 40px; color: #333; line-height: 1.6;} h1{color: #2563eb;} .page-break-before{page-break-before: always;}</style></head><body>${html}</body></html>`;
+    const converted = htmlDocx.asBlob(fullHtml);
+    downloadBlob(converted, `${filename}.docx`);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'photo' | 'logo') => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const base64 = ev.target?.result as string;
+      if (type === 'photo') onUpdateExtras({ authorPhoto: base64 });
+      else onUpdateExtras({ authorLogo: base64 });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleGenerate3Proposals = async (type: 'cover' | 'box' | 'bg') => {
+    setIsGeneratingImg(type);
+    let promptBase = "";
+    if (type === 'cover') promptBase = ebookData.extras?.imagePrompts.cover || "Professional ebook cover design";
+    else if (type === 'box') promptBase = ebookData.extras?.imagePrompts.box3d || "3D box set presentation";
+    else promptBase = "Solid clean plain high quality light aesthetic background, white and subtle cream, very bright, professional minimalistic wallpaper for documents, no dark colors";
+    
+    try {
+      const lightPrompt = `${promptBase}, bright style, light colors, soft lighting, professional high resolution`;
+      const p1 = generateImage(`${lightPrompt}, minimal design`);
+      const p2 = generateImage(`${lightPrompt}, elegant texture`);
+      const p3 = generateImage(`${lightPrompt}, clean corporate look`);
+      const results = await Promise.all([p1, p2, p3]);
       
-      const docContent: any[] = [];
+      if (type === 'cover') onUpdateExtras({ coverProposals: results });
+      else if (type === 'box') onUpdateExtras({ boxProposals: results });
+      else onUpdateExtras({ bgProposals: results });
+    } catch (e) {
+      alert("Błąd generowania obrazów.");
+    } finally {
+      setIsGeneratingImg(null);
+    }
+  };
+
+  const handleGenerateAudioForChapter = async (chapterId: string, index: number) => {
+    const chapter = ebookData.chapters.find(c => c.id === chapterId);
+    if (!chapter?.content) return;
+    setIsGeneratingAudio(true);
+    try {
+      const fullText = `Rozdział ${index + 1}. ${chapter.title}. ${chapter.content}`;
+      const url = await generateAudiobook(fullText, selectedVoice);
+      setAudioChapters(prev => ({ ...prev, [chapter.id]: url }));
+    } catch (e) {
+      alert("Błąd audio.");
+    } finally {
+      setIsGeneratingAudio(false);
+    }
+  };
+
+  const handleGenerateAudioAll = async () => {
+    const chaptersToProcess = ebookData.chapters.filter(c => c.content);
+    setIsGeneratingAudio(true);
+    setAudioProgress({ current: 0, total: chaptersToProcess.length });
+    
+    try {
+      for (let i = 0; i < chaptersToProcess.length; i++) {
+        const chapter = chaptersToProcess[i];
+        setAudioProgress({ current: i + 1, total: chaptersToProcess.length });
+        const fullText = `Rozdział ${i + 1}. ${chapter.title}. ${chapter.content}`;
+        const url = await generateAudiobook(fullText, selectedVoice);
+        setAudioChapters(prev => ({ ...prev, [chapter.id]: url }));
+      }
+    } catch (err) {
+      alert("Błąd podczas generowania paczki audio.");
+    } finally { 
+      setIsGeneratingAudio(false); 
+      setAudioProgress(null);
+    }
+  };
+
+  const downloadGraphicsZip = async () => {
+    if (typeof JSZip === 'undefined') { alert("JSZip nie załadowany."); return; }
+    setIsZipping(true);
+    try {
+      const zip = new JSZip();
+      const folder = zip.folder("Ebook_Resources");
       
-      // Cover Page
-      if (uploadedImages['cover']) {
-        docContent.push({
-            image: uploadedImages['cover'],
-            width: 500,
-            alignment: 'center',
-            margin: [0, 20, 0, 20]
-        });
-      }
-      docContent.push({ text: processTextForPdf(ebookData.title, 'coverTitle'), style: 'coverTitle', margin: [0, 20, 0, 10], alignment: 'center' });
-      docContent.push({ text: ebookData.briefing?.topic || '', style: 'coverSubtitle', margin: [0, 0, 0, 40] });
-      docContent.push({ text: author, style: 'coverAuthor', margin: [0, 200, 0, 5] });
-
-      if (isTeaser) {
-           docContent.push({ text: processTextForPdf('DARMOWY FRAGMENT 🚀', 'teaserLabel'), style: 'teaserLabel', alignment: 'center', margin: [0, 10, 0, 0] });
-      } else {
-           docContent.push({ text: `${currentYear}`, style: 'normal', alignment: 'center' });
-      }
-
-      // Page Break
-      docContent.push({ text: '', pageBreak: 'after' });
-      
-      // TOC
-      docContent.push({ text: 'Spis Treści', style: 'header', alignment: 'center', margin: [0, 0, 0, 20] });
-      const tocList = ebookData.chapters.map((c, i) => ({
-        text: `${i + 1}. ${c.title} ${isTeaser && i > 1 ? '(W pełnej wersji)' : ''}`,
-        style: isTeaser && i > 1 ? 'dimmed' : 'tocItem',
-        margin: [0, 5, 0, 5]
-      }));
-      docContent.push({ ul: tocList, style: 'tocList' });
-      docContent.push({ text: '', pageBreak: 'after' });
-
-      // Chapters
-      const chaptersToInclude = isTeaser ? ebookData.chapters.slice(0, 2) : ebookData.chapters;
-      chaptersToInclude.forEach((chapter, index) => {
-         if (index > 0) docContent.push({ text: '', pageBreak: 'before' });
-         
-         docContent.push({ text: `Rozdział ${index + 1}`, style: 'chapterLabel' });
-         docContent.push({ text: chapter.title, style: 'header' });
-         
-         if (uploadedImages[`chapter-${index}`]) {
-             docContent.push({ image: uploadedImages[`chapter-${index}`], width: 400, alignment: 'center', margin: [0, 10, 0, 20] });
-         }
-
-         const paragraphs = chapter.content.split('\n\n');
-         paragraphs.forEach(para => {
-             const trimPara = para.trim();
-             if (trimPara.startsWith('|') && trimPara.includes('|') && trimPara.split('\n').length > 1) {
-                 const tableDef = parseMarkdownTableToPdfMake(trimPara);
-                 if (tableDef) { docContent.push(tableDef); return; }
-             }
-             if (para.startsWith('## ')) {
-               docContent.push({ text: para.replace('## ', ''), style: 'subheader' });
-             } else if (para.startsWith('### ')) {
-               docContent.push({ text: para.replace('### ', ''), style: 'subsubheader' });
-             } else {
-               docContent.push({ text: processTextForPdf(trimPara, 'normal'), style: 'normal' });
-             }
-         });
-      });
-
-      // CTA for Teaser / Extras for Full
-      if (isTeaser) {
-           docContent.push({ text: '', pageBreak: 'before' });
-           docContent.push({ text: 'KUP PEŁNĄ WERSJĘ', style: 'cta', link: purchaseLink, alignment: 'center', margin: [0, 20, 0, 0] });
-           if (qrCodeUrl) {
-               // Assuming qrCodeUrl is valid image data/url
-               try {
-                  docContent.push({ image: qrCodeUrl, width: 150, alignment: 'center', margin: [0, 10, 0, 0] });
-               } catch(e) {}
-           }
-      } else {
-           if (ebookData.extras?.checklist) {
-               docContent.push({ text: '', pageBreak: 'before' });
-               docContent.push({ text: 'Checklista ✅', style: 'header' });
-               const items = ebookData.extras.checklist.split('\n').filter(l => l.trim().length > 0);
-               docContent.push({ ul: items, margin: [0, 10, 0, 0] });
-           }
-      }
-
-      // Background logic
-      const background = (currentPage: number) => {
-          if (currentPage > 1 && uploadedImages['pageBackground']) {
-              return {
-                 image: uploadedImages['pageBackground'],
-                 width: 595.28,
-                 height: 841.89,
-                 absolutePosition: { x: 0, y: 0 }
-              };
-          }
-          return null; // White background by default
+      const addFile = async (url: string, name: string) => {
+        const res = await fetch(url);
+        const blob = await res.blob();
+        folder.file(name, blob);
       };
 
-      return {
-          content: docContent,
-          background: background,
-          styles: {
-            header: { fontSize: 24, bold: true, margin: [0, 20, 0, 10], color: '#111827' },
-            subheader: { fontSize: 18, bold: true, margin: [0, 15, 0, 8], color: '#374151' },
-            subsubheader: { fontSize: 14, bold: true, margin: [0, 10, 0, 5], color: '#4b5563' },
-            normal: { fontSize: 11, margin: [0, 0, 0, 12], alignment: 'justify', lineHeight: 1.4, color: '#374151' },
-            coverTitle: { fontSize: 36, bold: true, alignment: 'center', color: '#111827' },
-            coverSubtitle: { fontSize: 18, alignment: 'center', color: '#4b5563' },
-            coverAuthor: { fontSize: 16, bold: true, alignment: 'center', color: '#374151' },
-            teaserLabel: { fontSize: 14, bold: true, color: '#dc2626', alignment: 'center' },
-            chapterLabel: { fontSize: 10, bold: true, color: '#9ca3af', margin: [0, 40, 0, 0] },
-            tocItem: { fontSize: 12, margin: [0, 5, 0, 5], color: '#374151' },
-            dimmed: { fontSize: 10, color: '#9ca3af' },
-            cta: { fontSize: 18, bold: true, color: '#2563eb', decoration: 'underline' },
-            tableCell: { fontSize: 10, color: '#374151', margin: [0, 5, 0, 5] },
-            tocList: { markerColor: '#2563eb' }
-          },
-          defaultStyle: { font: 'Roboto' }
-      };
+      if (ebookData.extras?.authorPhoto) await addFile(ebookData.extras.authorPhoto, "Cover_Photo.png");
+      if (ebookData.extras?.authorLogo) await addFile(ebookData.extras.authorLogo, "Brand_Logo.png");
+      if (ebookData.extras?.pageBackgroundUrl) await addFile(ebookData.extras.pageBackgroundUrl, "Page_Background.png");
+
+      const content = await zip.generateAsync({ type: "blob" });
+      downloadBlob(content, `${ebookData.title}_Materials.zip`);
+    } finally {
+      setIsZipping(false);
+    }
   };
-
-  const handleExportPDF = () => {
-      if (typeof pdfMake === 'undefined') { alert("Brak biblioteki PDF"); return; }
-      try {
-        const dd = createPdfDocDefinition(false);
-        pdfMake.createPdf(dd).download(`${ebookData.title.replace(/[^a-z0-9]/gi, '_')}.pdf`);
-      } catch (e) { console.error(e); alert("Błąd generowania PDF"); }
-  };
-
-  const handleExportTeaserPDF = () => {
-      if (typeof pdfMake === 'undefined') { alert("Brak biblioteki PDF"); return; }
-      try {
-        const dd = createPdfDocDefinition(true);
-        pdfMake.createPdf(dd).download(`${ebookData.title.replace(/[^a-z0-9]/gi, '_')}_TEASER.pdf`);
-      } catch (e) { console.error(e); alert("Błąd generowania PDF"); }
-  };
-
-  const handleGenerateAudio = async () => {
-      setIsGeneratingAudio(true);
-      try {
-          // Flatten text
-          const fullText = ebookData.chapters.map(c => c.title + ". " + c.content).join("\n\n");
-          // Generate - using a chunk for demo
-          const url = await generateAudiobook(fullText.substring(0, 2000), selectedVoice); 
-          setAudioUrl(url);
-          onUpdateExtras({ audiobookUrl: url, audioVoice: selectedVoice });
-      } catch (e) {
-          console.error(e);
-          alert("Błąd generowania audio.");
-      } finally {
-          setIsGeneratingAudio(false);
-      }
-  };
-
-  const handleGenerateTraining = async () => {
-      if (!ebookData.briefing) return;
-      setIsGeneratingCourse(true);
-      try {
-          const course = await generateCourse(ebookData.briefing, ebookData.title, ebookData.chapters);
-          onUpdateExtras({ trainingCourse: course });
-      } catch (e) {
-          console.error(e);
-          alert("Błąd generowania kursu.");
-      } finally {
-          setIsGeneratingCourse(false);
-      }
-  };
-
-  const ImageUploadBox = ({ label, onUpload, currentImage, compact }: any) => (
-      <div className={`border-2 border-dashed border-gray-300 rounded-lg p-4 flex flex-col items-center justify-center cursor-pointer hover:bg-gray-50 ${compact ? 'h-32' : 'h-48'}`} onClick={() => document.getElementById(`file-${label}`)?.click()}>
-          <input id={`file-${label}`} type="file" className="hidden" accept="image/*" onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])} />
-          {currentImage ? (
-              <img src={currentImage} className="max-h-full max-w-full object-contain" />
-          ) : (
-              <div className="text-center text-gray-400">
-                  <UploadIcon className="w-8 h-8 mx-auto mb-2" />
-                  <span className="text-xs">{label}</span>
-              </div>
-          )}
-      </div>
-  );
-
-  const marketingBlurbWithCta = ebookData.extras?.marketingBlurb 
-    ? ebookData.extras.marketingBlurb + `
-      <div style="text-align: center; margin-top: 30px; margin-bottom: 20px;">
-        <a href="${purchaseLink}" style="background-color: #2563eb; color: white; padding: 16px 32px; text-decoration: none; border-radius: 50px; font-weight: bold; font-size: 18px; display: inline-block; box-shadow: 0 10px 15px -3px rgba(37, 99, 235, 0.3);">
-          KUP TERAZ 🚀
-        </a>
-      </div>`
-    : '';
 
   return (
-    <div className="flex flex-col h-full bg-gray-50 overflow-hidden relative">
-      <div className="bg-white border-b border-gray-200 px-4 md:px-8 py-3 flex flex-col md:flex-row justify-between items-center shadow-sm z-10 gap-4 md:gap-0">
-        <div className="flex items-center space-x-2 text-sm text-gray-500 overflow-x-auto w-full md:w-auto pb-2 md:pb-0">
-          <button onClick={() => onChangePhase(AppPhase.BRIEFING)} className="hover:text-blue-600 whitespace-nowrap">Briefing</button>
-          <span>/</span>
-          <button onClick={() => onChangePhase(AppPhase.STRUCTURE)} className="hover:text-blue-600 whitespace-nowrap">Struktura</button>
-          <span>/</span>
-          <button onClick={() => onChangePhase(AppPhase.WRITING)} className="hover:text-blue-600 whitespace-nowrap">Treść</button>
-          <span>/</span>
-          <span className="font-bold text-gray-900 whitespace-nowrap">Gotowy Produkt</span>
+    <div className="flex flex-col h-full bg-gray-50 overflow-hidden">
+      <div className="bg-white border-b px-8 py-4 flex justify-between items-center shadow-sm z-20">
+        <div className="flex bg-slate-100 p-1.5 rounded-2xl">
+          <button onClick={() => setActiveTab('marketing')} className={`px-6 py-2.5 rounded-xl text-xs font-black transition-all ${activeTab === 'marketing' ? 'bg-white shadow-lg text-blue-600' : 'text-slate-500'}`}>MARKETING</button>
+          <button onClick={() => setActiveTab('ebook')} className={`px-6 py-2.5 rounded-xl text-xs font-black transition-all ${activeTab === 'ebook' ? 'bg-white shadow-lg text-blue-600' : 'text-slate-500'}`}>E-BOOK A4</button>
+          <button onClick={() => setActiveTab('training')} className={`px-6 py-2.5 rounded-xl text-xs font-black transition-all ${activeTab === 'training' ? 'bg-white shadow-lg text-orange-600' : 'text-slate-500'}`}>SZKOLENIE</button>
+          <button onClick={() => setActiveTab('audio')} className={`px-6 py-2.5 rounded-xl text-xs font-black transition-all ${activeTab === 'audio' ? 'bg-white shadow-lg text-purple-600' : 'text-slate-500'}`}>AUDIOBOOK</button>
+          <button onClick={() => setActiveTab('tools')} className={`px-6 py-2.5 rounded-xl text-xs font-black transition-all ${activeTab === 'tools' ? 'bg-white shadow-lg text-emerald-600' : 'text-slate-500'}`}>NARZĘDZIA</button>
         </div>
-        
-        <div className="flex bg-gray-100 p-1 rounded-lg w-full md:w-auto overflow-x-auto">
-          <button onClick={() => setActiveTab('marketing')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'marketing' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-900'}`}>Marketing</button>
-          <button onClick={() => setActiveTab('ebook')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'ebook' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-900'}`}>E-book</button>
-          <button onClick={() => setActiveTab('training')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center justify-center ${activeTab === 'training' ? 'bg-white shadow text-orange-600' : 'text-gray-500 hover:text-gray-900'}`}><GraduationCap className="w-4 h-4 mr-1" /> Szkolenie</button>
-          <button onClick={() => setActiveTab('audio')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center justify-center ${activeTab === 'audio' ? 'bg-white shadow text-purple-600' : 'text-gray-500 hover:text-gray-900'}`}><Headphones className="w-4 h-4 mr-1" /> Audio</button>
-        </div>
+        <button onClick={() => onChangePhase(AppPhase.DASHBOARD)} className="text-xs font-black text-slate-400 flex items-center hover:text-slate-900 transition-colors">DASHBOARD <ArrowRight className="w-4 h-4 ml-2" /></button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 lg:p-8">
-        <div className="max-w-6xl mx-auto">
-             {!ebookData.extras && !isGenerating ? (
-                 <div className="text-center py-20">
-                     <Sparkles className="w-16 h-16 text-gray-300 mx-auto mb-6" />
-                     <h2 className="text-2xl font-bold text-gray-900 mb-4">Materiały dodatkowe nie zostały jeszcze wygenerowane.</h2>
-                     <button onClick={onGenerateExtras} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-full shadow-lg transition-transform hover:scale-105">
-                         Generuj Pakiet Marketingowy
-                     </button>
-                 </div>
-             ) : isGenerating ? (
-                <div className="text-center py-20 animate-pulse">
-                  <Sparkles className="w-16 h-16 text-blue-500 animate-spin mx-auto mb-6" />
-                  <h2 className="text-2xl font-bold text-gray-900 mb-2">Generuję materiały...</h2>
-                  <p className="text-gray-500">To może potrwać do minuty. Tworzymy opisy, prompty i strategie.</p>
-                </div>
-             ) : (
-                <>
-                  {/* MARKETING TAB */}
-                  {activeTab === 'marketing' && (
-                      <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-500">
-                          {/* Teaser Section */}
-                          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                             <div className="flex justify-between items-center mb-6">
-                                 <h3 className="text-xl font-bold text-gray-900 flex items-center"><Layers className="w-6 h-6 mr-2 text-indigo-600" /> Lead Magnet (Teaser)</h3>
-                                 <div className="flex gap-2">
-                                     <button onClick={handleCopyTeaserText} className="flex items-center px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-bold"><Copy className="w-4 h-4 mr-2" /> Kopiuj Tekst</button>
-                                     <button onClick={handleExportTeaserPDF} className="flex items-center px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-bold"><FileDown className="w-4 h-4 mr-2" /> Pobierz PDF</button>
-                                 </div>
-                             </div>
-                             {/* Cover Preview */}
-                             <div className="flex justify-center p-4 bg-gray-50 rounded-xl border border-gray-100">
-                                <div className="w-48 h-64 bg-white shadow-lg flex items-center justify-center overflow-hidden">
-                                    {uploadedImages['cover'] ? <img src={uploadedImages['cover']} className="w-full h-full object-cover" /> : <span className="text-xs text-gray-400">Brak okładki</span>}
-                                </div>
-                             </div>
+      <div className="flex-1 overflow-y-auto p-8 lg:p-12">
+        <div className="max-w-7xl mx-auto">
+          {!ebookData.extras && !isGenerating ? (
+            <div className="text-center py-24 bg-white rounded-[40px] border-2 border-dashed border-slate-200 shadow-xl">
+              <Megaphone className="w-20 h-20 text-blue-100 mx-auto mb-8" />
+              <h2 className="text-3xl font-black text-slate-900 mb-4">Projekt ukończony!</h2>
+              <button onClick={onGenerateExtras} className="bg-blue-600 hover:bg-blue-700 text-white font-black py-5 px-14 rounded-3xl shadow-2xl transition-all">GENERUJ MATERIAŁY KOŃCOWE</button>
+            </div>
+          ) : isGenerating ? (
+            <div className="text-center py-24"><Loader2 className="w-16 h-16 text-blue-500 animate-spin mx-auto mb-8" /><h2 className="text-2xl font-black text-slate-900">Tworzenie imperium treści...</h2></div>
+          ) : (
+            <>
+              {activeTab === 'marketing' && (
+                <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <div className="lg:col-span-2 space-y-8">
+                       <div className="bg-white p-10 rounded-[40px] border shadow-sm relative overflow-hidden">
+                          <div className="absolute top-0 right-0 p-8 flex gap-2">
+                             <button onClick={() => handleExportDOCX(salesCopyRef, "Sales_Copy", true)} className="p-3 bg-blue-600 text-white rounded-2xl shadow-xl hover:scale-105 transition-all flex items-center text-xs font-black uppercase"><DownloadCloud className="w-4 h-4 mr-2" /> Word (.docx)</button>
                           </div>
+                          <h3 className="text-3xl font-black mb-8 text-blue-600 flex items-center"><Zap className="w-8 h-8 mr-3 text-amber-500" /> Maszyna Sprzedażowa</h3>
+                          <div ref={salesCopyRef} className="prose prose-lg max-w-none text-slate-800 leading-relaxed">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{ebookData.extras?.salesSummary || ''}</ReactMarkdown>
+                          </div>
+                       </div>
+                    </div>
+
+                    <div className="space-y-8">
+                       <div className="bg-white p-8 rounded-[40px] border shadow-sm">
+                          <h4 className="text-xl font-black mb-6 flex items-center"><Palette className="w-6 h-6 mr-3 text-purple-600" /> Branding & Grafika</h4>
                           
-                          {/* Descriptions */}
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                              <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-                                  <div className="flex justify-between items-center mb-2">
-                                      <span className="text-xs font-bold text-gray-500 uppercase">Hook (100 zn)</span>
-                                      <Copy className="w-4 h-4 text-gray-400 cursor-pointer" onClick={() => handleCopy(ebookData.extras?.shortDescription || '')} />
-                                  </div>
-                                  <p className="text-sm italic text-gray-700">{ebookData.extras?.shortDescription}</p>
-                              </div>
-                              <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-                                  <div className="flex justify-between items-center mb-2">
-                                      <span className="text-xs font-bold text-gray-500 uppercase">Ads (200 zn)</span>
-                                      <Copy className="w-4 h-4 text-gray-400 cursor-pointer" onClick={() => handleCopy(ebookData.extras?.mediumDescription || '')} />
-                                  </div>
-                                  <p className="text-sm italic text-gray-700">{ebookData.extras?.mediumDescription}</p>
-                              </div>
-                              <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-                                  <div className="flex justify-between items-center mb-2">
-                                      <span className="text-xs font-bold text-gray-500 uppercase">Promo Post</span>
-                                      <Copy className="w-4 h-4 text-gray-400 cursor-pointer" onClick={() => handleCopy(ebookData.extras?.longDescription || '')} />
-                                  </div>
-                                  <p className="text-sm italic text-gray-700 line-clamp-4">{ebookData.extras?.longDescription}</p>
-                              </div>
+                          <div className="grid grid-cols-2 gap-4 mb-8">
+                            <div className="space-y-2">
+                              <label className="flex flex-col items-center justify-center h-32 bg-slate-50 border-2 border-dashed border-slate-200 rounded-3xl cursor-pointer hover:bg-blue-50 transition-all overflow-hidden relative group">
+                                 {ebookData.extras?.authorLogo ? <img src={ebookData.extras.authorLogo} className="w-full h-full object-contain p-4" /> : <div className="text-center"><Upload className="w-6 h-6 mx-auto mb-1 text-slate-400"/><span className="text-[10px] font-black uppercase text-slate-400 tracking-tighter">Wgraj Logo</span></div>}
+                                 <input type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, 'logo')} />
+                              </label>
+                              <span className="block text-center text-[10px] font-black text-slate-400 uppercase tracking-widest">Twoje Logo</span>
+                            </div>
+                            <div className="space-y-2">
+                              <label className="flex flex-col items-center justify-center h-32 bg-slate-50 border-2 border-dashed border-slate-200 rounded-3xl cursor-pointer hover:bg-blue-50 transition-all overflow-hidden relative group">
+                                 {ebookData.extras?.authorPhoto ? <img src={ebookData.extras.authorPhoto} className="w-full h-full object-cover" /> : <div className="text-center"><User className="w-6 h-6 mx-auto mb-1 text-slate-400"/><span className="text-[10px] font-black uppercase text-slate-400 tracking-tighter">Wgraj Foto</span></div>}
+                                 <input type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, 'photo')} />
+                              </label>
+                              <span className="block text-center text-[10px] font-black text-slate-400 uppercase tracking-widest">Foto Autora</span>
+                            </div>
                           </div>
 
-                          {/* Graphics & Blurb */}
-                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                             {/* Blurb */}
-                             <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                                 <div className="flex justify-between items-start mb-4">
-                                     <h3 className="font-bold text-gray-900">Landing Page Copy</h3>
-                                     <Copy className="w-5 h-5 text-gray-400 cursor-pointer" onClick={() => handleCopy(marketingBlurbWithCta)} />
-                                 </div>
-                                 <div className="prose prose-sm prose-blue max-w-none bg-gray-50 p-4 rounded-lg border border-gray-100 h-96 overflow-y-auto" dangerouslySetInnerHTML={{ __html: marketingBlurbWithCta }} />
+                          <div className="mb-6 p-6 bg-blue-50/50 rounded-3xl border border-blue-100">
+                             <div className="flex justify-between items-center mb-4">
+                               <span className="text-xs font-black uppercase text-slate-500 tracking-widest">Okładka E-booka</span>
+                               <button onClick={() => handleGenerate3Proposals('cover')} disabled={!!isGeneratingImg} className="text-blue-600 hover:underline text-[10px] font-black uppercase">Generuj Propozycje</button>
                              </div>
-
-                             {/* Graphics Generator */}
-                             <div className="bg-slate-900 p-6 rounded-xl shadow-lg text-white">
-                                <h3 className="font-bold mb-6 flex items-center"><Palette className="w-5 h-5 mr-2" /> Studio Graficzne AI</h3>
-                                <div className="space-y-4">
-                                    {/* Cover */}
-                                    <div>
-                                        <div className="flex justify-between mb-2">
-                                            <label className="text-xs font-bold text-blue-300 uppercase">Okładka</label>
-                                            <div className="flex gap-2">
-                                                <button onClick={() => handleGenerateImage('cover', ebookData.extras?.imagePrompts.cover || '')} className="text-xs bg-blue-600 px-2 py-1 rounded">Generuj</button>
-                                                <button onClick={() => handleGenerateCoverVariations(ebookData.extras?.imagePrompts.cover || '')} className="text-xs bg-indigo-600 px-2 py-1 rounded">Warianty</button>
-                                            </div>
-                                        </div>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            <ImageUploadBox label="Okładka" onUpload={(f: File) => handleImageUpload('cover', f)} currentImage={uploadedImages['cover']} compact />
-                                            {coverVariations.length > 0 && (
-                                                <div className="grid grid-cols-2 gap-1 bg-slate-800 p-1 rounded">
-                                                    {coverVariations.map((v, i) => <img key={i} src={v} className="w-full h-16 object-cover cursor-pointer hover:opacity-80" onClick={() => handleSelectVariation(v)} />)}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                    
-                                    {/* Page Background */}
-                                    <div>
-                                        <div className="flex justify-between mb-2">
-                                            <label className="text-xs font-bold text-blue-300 uppercase">Tło Stron (PDF)</label>
-                                            <button onClick={() => handleGenerateImage('pageBackground', ebookData.extras?.imagePrompts.pageBackground || '')} className="text-xs bg-blue-600 px-2 py-1 rounded">Generuj Jasne Tło</button>
-                                        </div>
-                                        <ImageUploadBox label="Tło Stron" onUpload={(f: File) => handleImageUpload('pageBackground', f)} currentImage={uploadedImages['pageBackground']} compact />
-                                    </div>
-
-                                    {/* 3D Box */}
-                                    <div>
-                                        <div className="flex justify-between mb-2">
-                                            <label className="text-xs font-bold text-blue-300 uppercase">Box 3D</label>
-                                            <button onClick={() => handleGenerateImage('box3d', ebookData.extras?.imagePrompts.box3d || '')} className="text-xs bg-blue-600 px-2 py-1 rounded">Generuj</button>
-                                        </div>
-                                        <ImageUploadBox label="Box 3D" onUpload={(f: File) => handleImageUpload('box3d', f)} currentImage={uploadedImages['box3d']} compact />
-                                    </div>
-                                </div>
-                             </div>
-                          </div>
-                      </div>
-                  )}
-
-                  {/* EBOOK TAB */}
-                  {activeTab === 'ebook' && (
-                      <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-500">
-                          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 text-center py-12">
-                              <BookOpen className="w-16 h-16 text-blue-500 mx-auto mb-4" />
-                              <h2 className="text-3xl font-bold text-gray-900 mb-2">Pełna Wersja E-booka</h2>
-                              <p className="text-gray-600 mb-8 max-w-md mx-auto">Twój produkt jest gotowy do publikacji. Upewnij się, że dodałeś okładkę i wygenerowałeś obrazki do rozdziałów w sekcji Marketing.</p>
-                              
-                              <button onClick={handleExportPDF} className="bg-green-600 hover:bg-green-700 text-white font-bold py-4 px-10 rounded-full shadow-xl transition-all flex items-center mx-auto text-lg">
-                                  <Download className="w-6 h-6 mr-3" />
-                                  Pobierz Pełny PDF
-                              </button>
-                          </div>
-                      </div>
-                  )}
-
-                  {/* TRAINING TAB */}
-                  {activeTab === 'training' && (
-                      <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-500">
-                          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                              <div className="flex justify-between items-center mb-6 border-b pb-4">
-                                  <div>
-                                      <h2 className="text-2xl font-bold text-gray-900">Kurs / Szkolenie</h2>
-                                      <p className="text-gray-500 text-sm">Automatycznie wygenerowany sylabus i materiały szkoleniowe na podstawie e-booka.</p>
-                                  </div>
-                                  <button 
-                                    onClick={handleGenerateTraining} 
-                                    disabled={isGeneratingCourse}
-                                    className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-2 rounded-lg font-bold flex items-center disabled:opacity-50"
-                                  >
-                                      {isGeneratingCourse ? <RefreshCw className="w-4 h-4 animate-spin mr-2" /> : <Sparkles className="w-4 h-4 mr-2" />}
-                                      {ebookData.extras?.trainingCourse ? 'Generuj Ponownie' : 'Generuj Kurs'}
-                                  </button>
-                              </div>
-
-                              {ebookData.extras?.trainingCourse ? (
-                                  <div className="space-y-6">
-                                      <div className="bg-orange-50 p-6 rounded-xl border border-orange-100">
-                                          <h3 className="text-xl font-bold text-orange-900 mb-2">{ebookData.extras.trainingCourse.title}</h3>
-                                          <p className="text-orange-800 mb-4">{ebookData.extras.trainingCourse.description}</p>
-                                          <div className="flex gap-4 text-sm font-semibold text-orange-700">
-                                              <span>⏱ {ebookData.extras.trainingCourse.totalDuration}</span>
-                                              <span>👥 {ebookData.extras.trainingCourse.targetAudience}</span>
-                                          </div>
-                                      </div>
-                                      
-                                      <div className="space-y-4">
-                                          {ebookData.extras.trainingCourse.modules.map((mod, i) => (
-                                              <div key={i} className="border border-gray-200 rounded-lg p-4">
-                                                  <h4 className="font-bold text-lg mb-2 text-gray-800">Moduł {i+1}: {mod.title}</h4>
-                                                  <p className="text-sm text-gray-600 mb-3 bg-gray-50 p-2 rounded">Cel: {mod.objective}</p>
-                                                  <ul className="list-disc list-inside space-y-1 text-sm text-gray-700 ml-2">
-                                                      {mod.lessons.map((l, j) => (
-                                                          <li key={j}><span className="font-semibold">{l.title}</span> ({l.duration}) - <span className="italic text-gray-500">{l.activity}</span></li>
-                                                      ))}
-                                                  </ul>
-                                              </div>
-                                          ))}
-                                      </div>
-                                  </div>
-                              ) : (
-                                  <div className="text-center py-12 text-gray-400">
-                                      <GraduationCap className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                                      <p>Kliknij "Generuj Kurs", aby stworzyć program szkoleniowy.</p>
-                                  </div>
-                              )}
-                          </div>
-                      </div>
-                  )}
-
-                  {/* AUDIO TAB */}
-                  {activeTab === 'audio' && (
-                      <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-500">
-                           <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                               <div className="flex justify-between items-center mb-6">
-                                   <h2 className="text-2xl font-bold text-gray-900">Audiobook AI</h2>
-                                   <div className="flex items-center gap-2">
-                                       <select 
-                                         value={selectedVoice} 
-                                         onChange={(e) => setSelectedVoice(e.target.value)}
-                                         className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
-                                       >
-                                           <option value="Kore">Kore (Kobieta)</option>
-                                           <option value="Fenrir">Fenrir (Mężczyzna)</option>
-                                           <option value="Puck">Puck (Kobieta)</option>
-                                       </select>
-                                       <button 
-                                         onClick={handleGenerateAudio} 
-                                         disabled={isGeneratingAudio}
-                                         className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg font-bold flex items-center disabled:opacity-50"
-                                       >
-                                           {isGeneratingAudio ? <RefreshCw className="w-4 h-4 animate-spin mr-2" /> : <Headphones className="w-4 h-4 mr-2" />}
-                                           Generuj Audio
-                                       </button>
+                             {ebookData.extras?.coverProposals ? (
+                               <div className="space-y-4">
+                                 {ebookData.extras.coverProposals.map((img, i) => (
+                                   <div key={i} className={`group relative w-full aspect-[3/4] rounded-2xl overflow-hidden border-4 transition-all cursor-pointer shadow-xl ${ebookData.extras?.authorPhoto === img ? 'border-blue-600 scale-[1.02]' : 'border-transparent opacity-80'}`} onClick={() => onUpdateExtras({authorPhoto: img})}>
+                                      <img src={img} className="w-full h-full object-cover" />
                                    </div>
+                                 ))}
                                </div>
+                             ) : <div className="aspect-[3/4] bg-slate-200 rounded-2xl flex items-center justify-center text-slate-400"><LucideImage className="w-10 h-10" /></div>}
+                          </div>
 
-                               {audioUrl ? (
-                                   <div className="bg-purple-50 p-6 rounded-xl border border-purple-100 text-center">
-                                       <div className="w-20 h-20 bg-purple-200 rounded-full flex items-center justify-center mx-auto mb-4 text-purple-700">
-                                           <Headphones className="w-10 h-10" />
-                                       </div>
-                                       <h3 className="text-lg font-bold text-purple-900 mb-2">{ebookData.title} - Audiobook</h3>
-                                       <audio ref={audioRef} src={audioUrl} controls className="w-full mt-4" />
-                                       <a href={audioUrl} download={`audiobook-${ebookData.title}.wav`} className="inline-block mt-4 text-sm font-bold text-purple-600 hover:underline">
-                                           Pobierz plik .WAV
-                                       </a>
+                          <div className="mb-6 p-6 bg-slate-100/50 rounded-3xl border border-slate-200">
+                             <div className="flex justify-between items-center mb-4">
+                               <span className="text-xs font-black uppercase text-slate-500 tracking-widest">Jasne Tło Stron</span>
+                               <button onClick={() => handleGenerate3Proposals('bg')} disabled={!!isGeneratingImg} className="text-blue-600 hover:underline text-[10px] font-black uppercase">Generuj Tła</button>
+                             </div>
+                             {ebookData.extras?.bgProposals ? (
+                               <div className="grid grid-cols-1 gap-4">
+                                 {ebookData.extras.bgProposals.map((img, i) => (
+                                   <div key={i} className={`group relative w-full aspect-video rounded-2xl overflow-hidden border-4 transition-all cursor-pointer shadow-lg ${ebookData.extras?.pageBackgroundUrl === img ? 'border-blue-600' : 'border-transparent opacity-80'}`} onClick={() => onUpdateExtras({pageBackgroundUrl: img})}>
+                                      <img src={img} className="w-full h-full object-cover" />
                                    </div>
-                               ) : (
-                                   <div className="text-center py-12 text-gray-400">
-                                       <Headphones className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                                       <p>Wygeneruj wersję audio swojego e-booka.</p>
-                                   </div>
-                               )}
-                           </div>
+                                 ))}
+                               </div>
+                             ) : <div className="aspect-video bg-slate-200 rounded-2xl flex items-center justify-center text-slate-400"><LucideImage className="w-8 h-8" /></div>}
+                          </div>
+
+                          <button onClick={downloadGraphicsZip} disabled={isZipping} className="w-full py-5 bg-slate-900 text-white rounded-3xl text-xs font-black flex items-center justify-center gap-3 shadow-xl hover:scale-105 transition-all"><DownloadCloud className="w-5 h-5" /> POBIERZ PAKIET GRAFIK (.ZIP)</button>
+                       </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'ebook' && (
+                <div className="flex flex-col lg:flex-row gap-8 animate-in zoom-in-95 duration-500">
+                   <div className="lg:w-1/4 space-y-4">
+                      <div className="bg-white p-8 rounded-[32px] border shadow-sm sticky top-8">
+                         <h3 className="text-lg font-black mb-6 text-slate-900">Eksport Premium A4</h3>
+                         <button onClick={() => handleExportPDF(exportRef, ebookData.title)} disabled={isExporting} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-4 rounded-2xl mb-4 flex items-center justify-center shadow-lg shadow-blue-500/20">{isExporting ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <FileDown className="w-5 h-5 mr-2" />} POBIERZ PDF (A4)</button>
+                         <button onClick={() => handleExportDOCX(exportRef, ebookData.title)} className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-black py-4 rounded-2xl flex items-center justify-center"><DownloadCloud className="w-5 h-5 mr-2" /> POBIERZ WORD (.DOCX)</button>
                       </div>
-                  )}
-                </>
-             )}
+                   </div>
+                   <div className="lg:w-3/4">
+                      <div className="bg-slate-800 p-10 lg:p-20 rounded-[40px] shadow-inner overflow-hidden flex justify-center">
+                         <div ref={exportRef} className="bg-white shadow-2xl relative" style={{ width: '210mm', minHeight: '297mm', color: '#1a1a1a' }}>
+                            {/* Title Page */}
+                            <div className="relative flex flex-col items-center justify-center p-20 text-center overflow-hidden" style={{ height: '297mm' }}>
+                               {ebookData.extras?.pageBackgroundUrl && <img src={ebookData.extras.pageBackgroundUrl} className="absolute inset-0 w-full h-full object-cover opacity-20 -z-10" />}
+                               {ebookData.extras?.authorPhoto && <img src={ebookData.extras.authorPhoto} className="w-72 h-auto shadow-2xl rounded-2xl mb-12 border-8 border-white object-cover aspect-[3/4]" />}
+                               <h1 className="text-5xl font-black text-slate-900 mb-6 leading-tight">{ebookData.title}</h1>
+                               <div className="w-24 h-2 bg-blue-600 mb-8"></div>
+                               <p className="text-2xl font-bold text-blue-700">Autor: {ebookData.briefing?.authorName || 'E-book Architect'}</p>
+                            </div>
+
+                            {/* TOC */}
+                            <div className="p-24 page-break-before relative" style={{ minHeight: '297mm' }}>
+                               {ebookData.extras?.pageBackgroundUrl && <img src={ebookData.extras.pageBackgroundUrl} className="absolute inset-0 w-full h-full object-cover opacity-10 -z-10" />}
+                               <h2 className="text-4xl font-black mb-16 border-b-8 border-blue-600 pb-4">Spis Treści</h2>
+                               <div className="space-y-6">
+                                  {ebookData.chapters.map((ch, i) => (
+                                    <div key={ch.id} className="flex justify-between items-baseline group">
+                                       <div className="flex items-center gap-4">
+                                          <span className="text-lg font-black text-blue-600">{i + 1}.</span>
+                                          <span className="text-xl font-bold text-slate-800">{ch.title}</span>
+                                       </div>
+                                       <div className="flex-1 border-b border-dashed border-slate-300 mx-4"></div>
+                                       <span className="text-lg font-black text-slate-400">str. {i + 3}</span>
+                                    </div>
+                                  ))}
+                               </div>
+                            </div>
+
+                            {/* Chapters */}
+                            {ebookData.chapters.map((ch, i) => (
+                              <div key={ch.id} className="p-24 page-break-before relative" style={{ minHeight: '297mm' }}>
+                                 {ebookData.extras?.pageBackgroundUrl && <img src={ebookData.extras.pageBackgroundUrl} className="absolute inset-0 w-full h-full object-cover opacity-10 -z-10" />}
+                                 <div className="mb-12 flex items-center justify-between">
+                                    <span className="text-xs font-black text-blue-600 tracking-widest uppercase">Rozdział {i + 1}</span>
+                                 </div>
+                                 <h2 className="text-4xl font-black mb-10 text-slate-900 leading-tight border-l-8 border-blue-600 pl-6">{ch.title}</h2>
+                                 <div className="prose prose-lg max-w-none text-slate-800 leading-relaxed text-justify">
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{ch.content || 'Treść w przygotowaniu...'}</ReactMarkdown>
+                                 </div>
+                                 <div className="absolute bottom-10 left-0 right-0 text-center text-[10px] font-bold text-slate-300 uppercase tracking-widest">Strona {i + 3} | {ebookData.briefing?.authorName}</div>
+                              </div>
+                            ))}
+
+                            {/* Back Cover - Including Logo & Photo */}
+                            <div className="p-24 page-break-before relative flex flex-col items-center justify-center text-center" style={{ minHeight: '297mm' }}>
+                               {ebookData.extras?.pageBackgroundUrl && <img src={ebookData.extras.pageBackgroundUrl} className="absolute inset-0 w-full h-full object-cover opacity-10 -z-10" />}
+                               <h2 className="text-3xl font-black mb-12">O Autorze</h2>
+                               {ebookData.extras?.authorPhoto && (
+                                 <div className="mb-8">
+                                    <img src={ebookData.extras.authorPhoto} className="w-56 h-56 rounded-full border-8 border-white shadow-2xl object-cover mx-auto mb-6" />
+                                    <p className="text-2xl font-black text-slate-900">{ebookData.briefing?.authorName}</p>
+                                    <p className="text-blue-600 font-bold italic">Ekspert & Ghostwriter</p>
+                                 </div>
+                               )}
+                               <div className="max-w-md bg-white/80 p-10 rounded-[40px] shadow-xl border border-slate-100 italic">
+                                  <p className="text-slate-700 leading-relaxed">"{ebookData.extras?.longDescription}"</p>
+                                </div>
+                               {ebookData.extras?.authorLogo && (
+                                 <div className="absolute bottom-20">
+                                   <img src={ebookData.extras.authorLogo} className="w-32 object-contain" alt="Logo" />
+                                 </div>
+                               )}
+                            </div>
+                         </div>
+                      </div>
+                   </div>
+                </div>
+              )}
+
+              {activeTab === 'audio' && (
+                <div className="max-w-4xl mx-auto animate-in fade-in duration-500">
+                   <div className="bg-white p-12 rounded-[40px] border shadow-xl">
+                      <div className="flex items-center justify-between mb-10">
+                         <div className="flex items-center"><div className="w-16 h-16 bg-purple-100 rounded-3xl flex items-center justify-center text-purple-600 mr-5"><Headphones className="w-8 h-8" /></div><div><h3 className="text-2xl font-black text-slate-900">Audiobook Pro Engine</h3><p className="text-slate-500 font-bold">Lektor czyta rozdziały wraz z numerami.</p></div></div>
+                         <select value={selectedVoice} onChange={(e) => setSelectedVoice(e.target.value)} className="bg-slate-100 border-none px-6 py-4 rounded-2xl font-bold text-sm outline-none focus:ring-2 focus:ring-purple-400 transition-all">{AVAILABLE_VOICES.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select>
+                      </div>
+
+                      <div className="space-y-4 mb-10">
+                         {ebookData.chapters.map((ch, i) => (
+                            <div key={ch.id} className="p-6 bg-slate-50 rounded-3xl border border-slate-100 flex items-center justify-between">
+                               <div className="flex items-center"><div className="w-10 h-10 bg-white rounded-2xl flex items-center justify-center font-black text-slate-400 text-xs mr-4">{i + 1}</div><p className="font-bold text-slate-800">{ch.title}</p></div>
+                               {audioChapters[ch.id] ? (
+                                  <div className="flex items-center gap-3">
+                                     <audio src={audioChapters[ch.id]} controls className="h-8 w-48" />
+                                     <button onClick={() => handleGenerateAudioForChapter(ch.id, i)} className="p-2 text-slate-400 hover:text-purple-600 transition-colors"><RefreshCw className="w-4 h-4" /></button>
+                                  </div>
+                               ) : (
+                                  <button onClick={() => handleGenerateAudioForChapter(ch.id, i)} disabled={isGeneratingAudio || !ch.content} className="p-2 px-6 bg-white text-purple-600 text-[10px] font-black uppercase rounded-xl border border-purple-100 hover:bg-purple-600 hover:text-white transition-all disabled:opacity-50">Generuj Plik Audio</button>
+                               )}
+                            </div>
+                         ))}
+                      </div>
+
+                      {isGeneratingAudio && audioProgress ? (
+                         <div className="p-8 bg-purple-50 rounded-3xl border border-purple-100 text-center shadow-inner mb-6">
+                            <Loader2 className="w-10 h-10 text-purple-600 animate-spin mx-auto mb-4" />
+                            <p className="font-black text-purple-900">Przetwarzanie Rozdziału {audioProgress.current} z {audioProgress.total}</p>
+                            <div className="w-full bg-purple-200 h-2 rounded-full mt-4 overflow-hidden">
+                               <div className="bg-purple-600 h-full transition-all duration-1000" style={{ width: `${(audioProgress.current / audioProgress.total) * 100}%` }}></div>
+                            </div>
+                         </div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-4">
+                           <button onClick={handleGenerateAudioAll} disabled={isGeneratingAudio} className="bg-purple-600 hover:bg-purple-700 text-white font-black py-5 rounded-3xl shadow-xl flex items-center justify-center gap-3 transition-all"><Play className="w-5 h-5" /> GENERUJ WSZYSTKIE (AUTO)</button>
+                           <button onClick={async () => { setIsZipping(true); try { const zip = new JSZip(); for (let i = 0; i < ebookData.chapters.length; i++) { const ch = ebookData.chapters[i]; const url = audioChapters[ch.id]; if (url) { const res = await fetch(url); const blob = await res.blob(); zip.file(`rozdział_${i + 1}.wav`, blob); } } const content = await zip.generateAsync({type: 'blob'}); downloadBlob(content, `${ebookData.title}_Audiobook.zip`); } finally { setIsZipping(false); } }} disabled={Object.keys(audioChapters).length === 0 || isZipping} className="bg-slate-900 text-white font-black py-5 rounded-3xl disabled:opacity-50 flex items-center justify-center gap-3 shadow-xl"><DownloadCloud className="w-5 h-5" /> POBIERZ PACZKĘ .ZIP</button>
+                        </div>
+                      )}
+                   </div>
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
     </div>

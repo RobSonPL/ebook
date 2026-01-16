@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { BookOpen, Layers, PenTool, Sparkles, AlertCircle, LayoutDashboard, Shield } from 'lucide-react';
+import { BookOpen, Layers, PenTool, Sparkles, AlertCircle, LayoutDashboard, Shield, CheckCircle } from 'lucide-react';
 import { AppPhase, User } from '../types';
 
 interface LayoutProps {
@@ -11,6 +11,7 @@ interface LayoutProps {
   user: User;
   onLogout: () => void;
   onGoToAdmin: () => void;
+  onPhaseChange?: (phase: AppPhase) => void;
 }
 
 const steps = [
@@ -27,7 +28,8 @@ export const Layout: React.FC<LayoutProps> = ({
   onGoToDashboard,
   user,
   onLogout,
-  onGoToAdmin
+  onGoToAdmin,
+  onPhaseChange
 }) => {
   const isDashboard = currentPhase === AppPhase.DASHBOARD;
   const isAdminPanel = currentPhase === AppPhase.ADMIN;
@@ -41,7 +43,7 @@ export const Layout: React.FC<LayoutProps> = ({
           <span className="hidden lg:block ml-3 font-bold text-lg tracking-tight">E-book Architect</span>
         </div>
 
-        <nav className="flex-1 py-6 space-y-2 overflow-y-auto">
+        <nav className="flex-1 py-6 space-y-1 overflow-y-auto">
           
           <div
             onClick={onGoToDashboard}
@@ -74,30 +76,31 @@ export const Layout: React.FC<LayoutProps> = ({
           {!isDashboard && !isAdminPanel && (
              <>
                <div className="px-6 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider hidden lg:block">
-                 Aktualny Projekt
+                 Etapy Projektu
                </div>
                {steps.map((step) => {
                 const isActive = step.id === currentPhase;
                 const Icon = step.icon;
                 
                 // Calculate if step is passed
-                const phases = Object.values(AppPhase);
+                const phases = [AppPhase.BRIEFING, AppPhase.STRUCTURE, AppPhase.WRITING, AppPhase.EXTRAS];
                 const isPassed = phases.indexOf(step.id) < phases.indexOf(currentPhase);
 
                 return (
                   <div
                     key={step.id}
-                    className={`flex items-center px-4 py-3 mx-2 rounded-lg transition-colors ${
+                    onClick={() => onPhaseChange && onPhaseChange(step.id)}
+                    className={`flex items-center px-4 py-3 mx-2 rounded-lg transition-all cursor-pointer group ${
                       isActive
-                        ? 'bg-slate-800 text-white border-l-4 border-blue-500'
+                        ? 'bg-slate-800 text-white border-l-4 border-blue-500 shadow-inner'
                         : isPassed
-                        ? 'text-blue-200'
-                        : 'text-slate-600'
+                        ? 'text-blue-300 hover:bg-slate-800'
+                        : 'text-slate-600 hover:bg-slate-800 hover:text-slate-300'
                     }`}
                   >
-                    <Icon className={`w-5 h-5 ${isActive ? 'text-blue-400' : ''}`} />
+                    <Icon className={`w-5 h-5 transition-colors ${isActive ? 'text-blue-400' : isPassed ? 'text-blue-500' : ''}`} />
                     <span className="hidden lg:block ml-3 font-medium text-sm">{step.label}</span>
-                    {isPassed && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-green-500 hidden lg:block" />}
+                    {isPassed && <CheckCircle className="ml-auto w-4 h-4 text-green-500 hidden lg:block" />}
                   </div>
                 );
               })}
@@ -120,9 +123,9 @@ export const Layout: React.FC<LayoutProps> = ({
                alt={user.name} 
                className="w-10 h-10 rounded-full border-2 border-slate-600"
              />
-             <div className="ml-3 hidden lg:block min-w-0">
+             <div className="ml-3 hidden lg:block min-w-0 text-left">
                <p className="text-sm font-bold text-white truncate">{user.name}</p>
-               <p className="text-xs text-slate-400 truncate">{user.role === 'admin' ? 'Administrator' : 'Użytkownik'}</p>
+               <p className="text-xs text-slate-400 truncate uppercase font-black tracking-tighter">{user.role}</p>
              </div>
            </div>
         </div>
