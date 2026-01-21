@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Layout } from './components/Layout';
 import { Dashboard } from './components/Dashboard';
 import { PhaseBriefing } from './components/PhaseBriefing';
@@ -9,7 +9,6 @@ import { PhaseExtras } from './components/PhaseExtras';
 import { AdminPanel } from './components/AdminPanel';
 import { AppPhase, BriefingData, EbookData, User, ExtrasData } from './types';
 import { generateStructure, generateChapterStream, generateExtras } from './services/geminiService';
-import { getAllUsers } from './services/mockAuth';
 import { INITIAL_BRIEFING } from './constants';
 
 const App: React.FC = () => {
@@ -63,24 +62,31 @@ const App: React.FC = () => {
 
   const handleStartFromIdea = (idea: BriefingData) => {
     const newId = crypto.randomUUID();
-    const newData: EbookData = { 
-      id: newId, 
-      ownerId: currentUser.id, 
-      createdAt: Date.now(), 
-      lastUpdated: Date.now(), 
-      title: idea.topic || '', 
-      chapters: [], 
-      briefing: idea 
-    };
+    const newData: EbookData = { id: newId, ownerId: currentUser.id, createdAt: Date.now(), lastUpdated: Date.now(), title: idea.topic || '', chapters: [], briefing: idea };
     setEbookData(newData);
     setBriefing(idea);
     setPhase(AppPhase.BRIEFING);
   };
 
+  const handleFastTrackStructure = async (fastBriefing: BriefingData) => {
+    const newId = crypto.randomUUID();
+    setBriefing(fastBriefing);
+    setIsGenerating(true);
+    try {
+      const toc = await generateStructure(fastBriefing);
+      const updatedEbook: EbookData = {
+        id: newId, ownerId: currentUser.id, createdAt: Date.now(), lastUpdated: Date.now(), title: toc.title, briefing: fastBriefing,
+        chapters: toc.chapters.map((c, idx) => ({ id: `ch-${idx}`, title: c.title, description: c.description, content: '', status: 'pending' }))
+      };
+      setEbookData(updatedEbook);
+      setPhase(AppPhase.STRUCTURE);
+    } catch (e) { alert("Błąd generowania planu."); } finally { setIsGenerating(false); }
+  };
+
   const handleOpenEbook = (ebook: EbookData) => {
     setEbookData(ebook);
     setBriefing(ebook.briefing || INITIAL_BRIEFING);
-    if (ebook.extras) setPhase(AppPhase.EXTRAS);
+    if (ebook.extras) setPhase(AppPhase.GRAPHICS);
     else if (ebook.chapters.length > 0) { 
       setPhase(AppPhase.WRITING); 
       setCurrentChapterId(ebook.chapters[0].id); 
@@ -105,53 +111,24 @@ const App: React.FC = () => {
   const handlePhaseChange = (newPhase: AppPhase) => {
     if (newPhase === AppPhase.DASHBOARD) {
       saveEbookToLocalStorage();
-      setPhase(AppPhase.DASHBOARD);
-      return;
     }
-    // Walidacja przejścia do przodu
-    if (newPhase === AppPhase.STRUCTURE && ebookData.chapters.length === 0) return;
-    if (newPhase === AppPhase.WRITING && ebookData.chapters.length === 0) return;
-    if (newPhase === AppPhase.EXTRAS && !ebookData.chapters.some(c => c.status === 'completed')) return;
-    
     setPhase(newPhase);
   };
 
   const handleGenerateChapter = async (chapterId: string, instructions?: string, length?: 'micro' | 'short' | 'medium' | 'long' | 'very_long' | 'epic') => {
     const chapter = ebookData.chapters.find(c => c.id === chapterId);
     if (!chapter) return;
-    
-    // Resetuj treść i ustaw status ładowania
-    setEbookData(prev => ({ 
-      ...prev, 
-      chapters: prev.chapters.map(c => c.id === chapterId ? { ...c, status: 'generating', content: '' } : c) 
-    }));
-    
+    setEbookData(prev => ({ ...prev, chapters: prev.chapters.map(c => c.id === chapterId ? { ...c, status: 'generating', content: '' } : c) }));
     setIsGenerating(true);
     try {
       await generateChapterStream(briefing, chapter.title, chapter.description, ebookData.title, (chunk) => {
-        setEbookData(prev => ({ 
-          ...prev, 
-          chapters: prev.chapters.map(c => c.id === chapterId ? { ...c, content: c.content + chunk } : c) 
-        }));
+        setEbookData(prev => ({ ...prev, chapters: prev.chapters.map(c => c.id === chapterId ? { ...c, content: c.content + chunk } : c) }));
       }, instructions, length);
-      
-      setEbookData(prev => ({ 
-        ...prev, 
-        chapters: prev.chapters.map(c => c.id === chapterId ? { ...c, status: 'completed' } : c) 
-      }));
-      
-      // Auto-save po wygenerowaniu rozdziału
-      setLastSaved(Date.now());
+      setEbookData(prev => ({ ...prev, chapters: prev.chapters.map(c => c.id === chapterId ? { ...c, status: 'completed' } : c) }));
     } catch (e) { 
-      console.error(e);
-      alert("Błąd podczas generowania treści rozdziału."); 
-      setEbookData(prev => ({ 
-        ...prev, 
-        chapters: prev.chapters.map(c => c.id === chapterId ? { ...c, status: 'pending' } : c) 
-      }));
-    } finally { 
-      setIsGenerating(false); 
-    }
+      alert("Błąd generowania treści."); 
+      setEbookData(prev => ({ ...prev, chapters: prev.chapters.map(c => c.id === chapterId ? { ...c, status: 'pending' } : c) }));
+    } finally { setIsGenerating(false); }
   };
 
   return (
@@ -161,30 +138,28 @@ const App: React.FC = () => {
       user={currentUser} onLogout={() => {}} onGoToAdmin={() => setPhase(AppPhase.ADMIN)}
       onPhaseChange={handlePhaseChange}
     >
-      {phase === AppPhase.DASHBOARD && (
-        <Dashboard 
-          savedEbooks={allEbooks} 
-          onNewEbook={handleStartNew} 
-          onOpenEbook={handleOpenEbook} 
-          onDeleteEbook={(id) => setAllEbooks(p => p.filter(e => e.id !== id))} 
-          onStartFromIdea={handleStartFromIdea} 
-        />
-      )}
+      {phase === AppPhase.DASHBOARD && <Dashboard savedEbooks={allEbooks} onNewEbook={handleStartNew} onOpenEbook={handleOpenEbook} onDeleteEbook={(id) => setAllEbooks(p => p.filter(e => e.id !== id))} onStartFromIdea={handleStartFromIdea} onFastTrackStructure={handleFastTrackStructure} />}
       {phase === AppPhase.BRIEFING && <PhaseBriefing onNext={handleBriefingSubmit} isGenerating={isGenerating} initialData={briefing} />}
       {phase === AppPhase.STRUCTURE && <PhaseStructure title={ebookData.title} chapters={ebookData.chapters} onConfirm={() => setPhase(AppPhase.WRITING)} onEditChapter={(id, t, d) => setEbookData(p => ({...p, chapters: p.chapters.map(c => c.id === id ? {...c, title: t, description: d} : c)}))} onEditTitle={(t) => setEbookData(p => ({...p, title: t}))} />}
-      {phase === AppPhase.WRITING && (
-        <PhaseWriting 
-          chapters={ebookData.chapters} 
-          currentChapterId={currentChapterId} 
-          onSelectChapter={setCurrentChapterId} 
-          onGenerateChapter={handleGenerateChapter} 
-          onUpdateContent={(id, c) => setEbookData(p => ({...p, chapters: p.chapters.map(ch => ch.id === id ? {...ch, content: c} : ch)}))} 
-          onNextPhase={() => setPhase(AppPhase.EXTRAS)} 
+      {phase === AppPhase.WRITING && <PhaseWriting chapters={ebookData.chapters} currentChapterId={currentChapterId} onSelectChapter={setCurrentChapterId} onGenerateChapter={handleGenerateChapter} onUpdateContent={(id, c) => setEbookData(p => ({...p, chapters: p.chapters.map(ch => ch.id === id ? {...ch, content: c} : ch)}))} onNextPhase={() => setPhase(AppPhase.GRAPHICS)} isGenerating={isGenerating} lastSaved={lastSaved} />}
+      {(phase === AppPhase.GRAPHICS || phase === AppPhase.MARKETING || phase === AppPhase.AUDIO || phase === AppPhase.EXTRAS) && (
+        <PhaseExtras 
+          ebookData={ebookData} 
+          currentPhase={phase}
           isGenerating={isGenerating} 
-          lastSaved={lastSaved} 
+          onGenerateExtras={async () => { 
+            setIsGenerating(true); 
+            try { 
+              const ex = await generateExtras(briefing, ebookData.title); 
+              setEbookData(p => ({...p, extras: ex})); 
+            } finally { 
+              setIsGenerating(false); 
+            } 
+          }} 
+          onChangePhase={handlePhaseChange} 
+          onUpdateExtras={(u) => setEbookData(p => ({...p, extras: { ...(p.extras || ({} as ExtrasData)), ...u }}))} 
         />
       )}
-      {phase === AppPhase.EXTRAS && <PhaseExtras ebookData={ebookData} isGenerating={isGenerating} onGenerateExtras={async () => { setIsGenerating(true); try { const ex = await generateExtras(briefing, ebookData.title, ebookData.chapters); setEbookData(p => ({...p, extras: ex})); } finally { setIsGenerating(false); } }} onChangePhase={setPhase} onUpdateExtras={(u) => setEbookData(p => ({...p, extras: p.extras ? {...p.extras, ...u} : undefined}))} />}
     </Layout>
   );
 };

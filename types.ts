@@ -4,7 +4,10 @@ export enum AppPhase {
   BRIEFING = 'BRIEFING',
   STRUCTURE = 'STRUCTURE',
   WRITING = 'WRITING',
-  EXTRAS = 'EXTRAS',
+  GRAPHICS = 'GRAPHICS',
+  MARKETING = 'MARKETING',
+  AUDIO = 'AUDIO',
+  EXTRAS = 'EXTRAS', // Zachowane dla kompatybilności wstecznej
   ADMIN = 'ADMIN', 
 }
 
@@ -44,34 +47,6 @@ export interface Chapter {
   status: 'pending' | 'generating' | 'completed';
 }
 
-export interface TrainingLesson {
-  title: string;
-  duration: string;
-  keyTakeaways: string[];
-  activity: string;
-}
-
-export interface TrainingModule {
-  title: string;
-  objective: string;
-  lessons: TrainingLesson[];
-}
-
-export interface TrainingQuiz {
-  question: string;
-  options: string[];
-  correctAnswer: string;
-}
-
-export interface TrainingCourse {
-  title: string;
-  description: string;
-  targetAudience: string;
-  totalDuration: string;
-  modules: TrainingModule[];
-  quiz: TrainingQuiz[];
-}
-
 export interface ExtrasData {
   marketingBlurb: string;
   shortDescription: string; 
@@ -87,7 +62,16 @@ export interface ExtrasData {
     box3d: string;
     tocBackground: string;
     pageBackground: string;
+    coverProposals?: string[];
+    bgProposals?: string[];
+    boxProposals?: string[];
   };
+  generatedCovers?: string[];
+  generatedBackgrounds?: string[];
+  generatedBoxes?: string[];
+  selectedCoverIdx?: number;
+  selectedBgIdx?: number;
+  selectedBoxIdx?: number;
   tools?: {
     checklist: string[];
     todoList: string[];
@@ -96,13 +80,8 @@ export interface ExtrasData {
     inspiringPeople: { name: string, description: string }[];
     monthlyCalendarTitle: string;
   };
-  trainingCourse?: TrainingCourse;
   authorPhoto?: string;
   authorLogo?: string;
-  pageBackgroundUrl?: string;
-  coverProposals?: string[];
-  boxProposals?: string[];
-  bgProposals?: string[];
 }
 
 export type FontType = 'serif' | 'sans' | 'mono';
